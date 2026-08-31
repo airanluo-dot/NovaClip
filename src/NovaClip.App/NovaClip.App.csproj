@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFrameworks>net10.0-windows10.0.17763.0</TargetFrameworks>
+    <RootNamespace>NovaClip.App</RootNamespace>
+    <AssemblyName>NovaClip</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <UseWinUI>true</UseWinUI>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <AssemblyVersion>1.0.0.4</AssemblyVersion>
+    <FileVersion>1.0.0.4</FileVersion>
+    <InformationalVersion>1.0.0-beta.4</InformationalVersion>
+    <ApplicationIcon>..\..\assets\icons\NovaClip.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NovaClip.Contracts\NovaClip.Contracts.csproj" />
+    <ProjectReference Include="..\NovaClip.Core\NovaClip.Core.csproj" />
+    <ProjectReference Include="..\NovaClip.Infrastructure\NovaClip.Infrastructure.csproj" />
+    <ProjectReference Include="..\NovaClip.Bilibili\NovaClip.Bilibili.csproj" />
+    <ProjectReference Include="..\NovaClip.Windows\NovaClip.Windows.csproj" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Web.WebView2" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" PrivateAssets="all" />
+    <Content Include="..\..\assets\js\bilibili-bridge.js" Link="assets\js\bilibili-bridge.js" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\icons\NovaClip.png" Link="assets\icons\NovaClip.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\icons\NovaClip.ico" Link="assets\icons\NovaClip.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!--
+    dotnet publish does not automatically copy the compiled WinUI resource
+    index for this unpackaged app. At runtime XAML pages are resolved from
+    resources.pri next to NovaClip.exe, so copy NovaClip.pri explicitly.
+  -->
+  <Target Name="CopyAppPriToPublish" AfterTargets="Publish">
+    <Copy SourceFiles="$(TargetDir)$(TargetName).pri"
+          DestinationFiles="$(PublishDir)resources.pri"
+          OverwriteReadOnlyFiles="true"
+          SkipUnchangedFiles="false"
+          Condition="Exists('$(TargetDir)$(TargetName).pri')" />
+  </Target>
+</Project>

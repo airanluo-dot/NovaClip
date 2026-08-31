@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NovaClip.Contracts/NovaClip.Contracts.csproj" />
+    <Project Path="src/NovaClip.Core/NovaClip.Core.csproj" />
+    <Project Path="src/NovaClip.Bilibili/NovaClip.Bilibili.csproj" />
+    <Project Path="src/NovaClip.Infrastructure/NovaClip.Infrastructure.csproj" />
+    <Project Path="src/NovaClip.Windows/NovaClip.Windows.csproj" />
+    <Project Path="src/NovaClip.App/NovaClip.App.csproj" />
+    <Project Path="src/NovaClip.Updater/NovaClip.Updater.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NovaClip.Core.Tests/NovaClip.Core.Tests.csproj" />
+    <Project Path="tests/NovaClip.Bilibili.Tests/NovaClip.Bilibili.Tests.csproj" />
+    <Project Path="tests/NovaClip.Infrastructure.Tests/NovaClip.Infrastructure.Tests.csproj" />
+    <Project Path="tests/NovaClip.Windows.Tests/NovaClip.Windows.Tests.csproj" />
+  </Folder>
+</Solution>

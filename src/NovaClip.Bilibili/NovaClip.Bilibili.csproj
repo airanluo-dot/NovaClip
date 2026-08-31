@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <RootNamespace>NovaClip.Bilibili</RootNamespace>
+    <AssemblyName>NovaClip.Bilibili</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NovaClip.Contracts\NovaClip.Contracts.csproj" />
+    <ProjectReference Include="..\NovaClip.Core\NovaClip.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -15,11 +15,11 @@ if (Test-Path $publishRoot) { Remove-Item -Recurse -Force $publishRoot }
 if (Test-Path $portableRoot) { Remove-Item -Recurse -Force $portableRoot }
 if (Test-Path $portableZip) { Remove-Item -Force $portableZip }
 
-dotnet publish (Join-Path $repoRoot "src\BiliNative.App\BiliNative.App.csproj") `
+dotnet publish (Join-Path $repoRoot "src\NovaClip.App\NovaClip.App.csproj") `
     --configuration $Configuration --framework net10.0-windows10.0.17763.0 --runtime win-x64 --self-contained true `
     -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -o $publishRoot
 
-dotnet publish (Join-Path $repoRoot "src\BiliNative.Updater\BiliNative.Updater.csproj") `
+dotnet publish (Join-Path $repoRoot "src\NovaClip.Updater\NovaClip.Updater.csproj") `
     --configuration $Configuration --framework net10.0 --runtime win-x64 --self-contained true `
     -o $publishRoot
 
