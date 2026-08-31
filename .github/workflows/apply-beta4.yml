@@ -13,12 +13,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: Apply prepared source patch
-        if: hashFiles('NOVACLIP_BETA4.patch') != ''
+        if: hashFiles('NOVACLIP_BETA4_NOWORKFLOWS.patch') != ''
         run: |
           git config user.name "NovaClip Build Bot"
           git config user.email "actions@users.noreply.github.com"
-          git am --3way NOVACLIP_BETA4.patch
-          rm NOVACLIP_BETA4.patch .github/workflows/apply-beta4.yml
+          git am --3way NOVACLIP_BETA4_NOWORKFLOWS.patch
+          rm -f NOVACLIP_BETA4.patch NOVACLIP_BETA4_NOWORKFLOWS.patch
           git add -A
           git commit -m "chore: finish beta.4 web delivery"
           git push origin HEAD:refactor/beta.4-native-rebuild
