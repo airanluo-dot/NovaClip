@@ -37,7 +37,7 @@ NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 
 - 通过安装器安装时：下载 `*-setup.exe`，退出应用后使用同一个安装目录覆盖更新。
 - 直接运行便携版时：便携包包含 `portable.marker` 和独立更新器，下载 `*-portable.zip` 后在应用退出时替换文件并自动重启。
 
-当前仓库为私有仓库。开发者测试自动更新时可通过进程环境变量 `NOVACLIP_GITHUB_TOKEN` 提供只读 GitHub 访问令牌；令牌不会写入 NovaClip 设置。公开分发仍应改用公开、签名的更新源。Release 资产若提供 GitHub `digest`，下载后会先校验 SHA-256 再执行。
+当前仓库为公开仓库，NovaClip 默认可直接从公开的 GitHub Releases 获取更新元数据与发布资产，无需 GitHub 访问令牌。Release 资产若提供 GitHub `digest`，下载后会先校验 SHA-256 再执行；正式分发仍建议使用可信、签名的发布资产。
 
 ## 隐私与安全
 
