@@ -3,16 +3,16 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace BiliNative.App;
 
-public sealed partial class MainWindow : Window
+public sealed class MainWindow : Window
 {
     private readonly NavigationView _rootNavigationView;
     private readonly Frame _contentFrame;
 
     public MainWindow()
     {
-        StartupDiagnostics.Info("Constructing MainWindow.");
-        InitializeComponent();
+        StartupDiagnostics.Info("Constructing MainWindow without XAML.");
 
+        Title = "NovaClip";
         _contentFrame = new Frame();
         _rootNavigationView = new NavigationView
         {
