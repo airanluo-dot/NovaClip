@@ -1,3 +1,4 @@
+using System.Globalization;
 using BiliNative.Core;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -18,8 +19,8 @@ public sealed partial class SettingsPage : Page
     {
         var settings = AppServices.Settings;
         DownloadDirectoryBox.Text = settings.DownloadDirectory;
-        ConcurrencyBox.Text = settings.MaxConcurrentTasks.ToString();
-        RetryBox.Text = settings.MaxRetryAttempts.ToString();
+        ConcurrencyBox.Text = settings.MaxConcurrentTasks.ToString(CultureInfo.InvariantCulture);
+        RetryBox.Text = settings.MaxRetryAttempts.ToString(CultureInfo.InvariantCulture);
         FfmpegPathBox.Text = settings.FfmpegPath ?? string.Empty;
         MergeCheckBox.IsChecked = settings.MergeAfterDownload;
         DeleteTempCheckBox.IsChecked = settings.DeleteTemporaryFilesAfterMerge;
