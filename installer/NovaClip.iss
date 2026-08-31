@@ -6,8 +6,8 @@
 #endif
 
 #define ProductName "NovaClip"
-#define ProductVersion "1.0.0.2"
-#define DisplayVersion "1.0.0-beta.2"
+#define ProductVersion "1.0.0.3"
+#define DisplayVersion "1.0.0-beta.3"
 #define ProductPublisher "Aren Vox"
 #define ProductExe "NovaClip.exe"
 
@@ -17,7 +17,8 @@ AppName={#ProductName}
 AppVersion={#ProductVersion}
 AppVerName={#ProductName} {#DisplayVersion}
 AppPublisher={#ProductPublisher}
-DefaultDirName={localappdata}\NovaClip
+DefaultDirName={localappdata}\NovaClip\App
+UsePreviousAppDir=no
 DefaultGroupName={#ProductName}
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
@@ -25,7 +26,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
 OutputDir={#OutputDir}
-OutputBaseFilename=NovaClip-1.0.0-beta.2-win-x64-setup
+OutputBaseFilename=NovaClip-1.0.0-beta.3-win-x64-setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern

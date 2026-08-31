@@ -13,9 +13,9 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <PublishSingleFile>false</PublishSingleFile>
     <PublishReadyToRun>false</PublishReadyToRun>
-    <AssemblyVersion>1.0.0.2</AssemblyVersion>
-    <FileVersion>1.0.0.2</FileVersion>
-    <InformationalVersion>1.0.0-beta.2</InformationalVersion>
+    <AssemblyVersion>1.0.0.3</AssemblyVersion>
+    <FileVersion>1.0.0.3</FileVersion>
+    <InformationalVersion>1.0.0-beta.3</InformationalVersion>
     <ApplicationIcon>..\..\assets\icons\NovaClip.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>

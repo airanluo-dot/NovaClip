@@ -1,26 +1,31 @@
-# Status — 1.0.0-beta.2
+# Status — 1.0.0-beta.3
 
-## Implemented and repaired in this beta
+## Real-device startup hotfix
 
-- Correct WinUI 3 resource initialization through merged `XamlControlsResources`.
-- Restore the normal generated WinUI application entry point instead of maintaining a duplicate custom Main.
-- Add startup diagnostics at `%LocalAppData%\NovaClip\Logs\startup.log` and a visible startup-failure window.
-- Replace packaged-only `Windows.Storage.ApplicationData.Current` settings with atomic JSON settings for the unpackaged app.
-- Construct the download manager only after settings load so configured startup concurrency is honored.
-- Separate media and GitHub update HTTP clients.
-- Copy the active Bilibili WebView2 User-Agent and cookies into each in-memory download request and add Bilibili Referer/Origin headers; cookies are not persisted.
-- Enable legacy DURL tasks from the UI instead of leaving the button permanently disabled.
-- Repair download-state transitions for DURL and single-track finalization and allow failed tasks to retry.
-- Add clear preflight handling when DASH merge requires FFmpeg but FFmpeg is unavailable.
-- Make private GitHub update access explicit through optional `NOVACLIP_GITHUB_TOKEN` rather than silently returning “no update”.
-- Download release assets through the GitHub asset API and verify GitHub SHA-256 digests before execution when present.
-- Run installed updates only after NovaClip exits by delegating to `NovaClip.Updater.exe`.
-- Fix Browser and History page row definitions.
-- Add a Windows CI startup smoke test that launches the actual published `NovaClip.exe` and fails the build if it exits during startup.
+A Windows real-device beta.2 log proved that settings, SQLite and task restoration all completed successfully, then MainWindow.InitializeComponent failed with Microsoft.UI.Xaml.Markup.XamlParseException.
 
-## Remaining beta limitations
+Beta.3 makes MainWindow XAML intentionally minimal and constructs NavigationView, menu items and Frame in C# after the Window component loads. It also catches individual page navigation failures and renders the exception inside the main window instead of making the entire application disappear.
 
-- FFmpeg is not redistributed in the repository; the tester must provide a compatible `ffmpeg.exe` for DASH audio/video merge.
-- The repository is private, so anonymous clients cannot use GitHub Releases for automatic update discovery. A public signed update feed is still required before public distribution.
-- Restart recovery can restore non-secret request metadata and Range state, but Bilibili cookies are intentionally not persisted; a task whose signed CDN URL expires after a full app restart may need the media page reopened before retry.
-- Real Bilibili playback, login persistence, CDN authorization and FFmpeg output still require a Windows real-device acceptance pass in addition to CI.
+## Installer migration
+
+Beta.1/beta.2 installed executable files directly into %LocalAppData%\NovaClip, the same directory used for persistent data. That also made coverage installs vulnerable to stale binary/XAML resources.
+
+Beta.3 installs binaries into:
+
+%LocalAppData%\NovaClip\App
+
+while settings, SQLite, logs and WebView2 profile remain under:
+
+%LocalAppData%\NovaClip
+
+The AppId is unchanged and UsePreviousAppDir is disabled so running the beta.3 installer over beta.2 migrates the active install path without requiring a manual uninstall.
+
+## CI correction
+
+The beta.2 smoke test only checked that the process stayed alive. A startup-failure window also keeps the process alive, so that test produced a false positive.
+
+Beta.3 requires startup.log to prove both:
+- Main window activated and startup completed.
+- Navigation completed: BrowserPage.
+
+It also fails on a recorded startup failure.

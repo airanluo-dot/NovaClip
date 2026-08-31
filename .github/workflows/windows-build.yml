@@ -39,13 +39,24 @@ jobs:
           $startupLog = Join-Path $env:LOCALAPPDATA "NovaClip\Logs\startup.log"
           if (Test-Path $startupLog) { Remove-Item $startupLog -Force }
           $process = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 10
+          Start-Sleep -Seconds 12
+          $logText = if (Test-Path $startupLog) { Get-Content $startupLog -Raw } else { "" }
+          Write-Host "---- NovaClip startup.log ----"
+          Write-Host $logText
           if ($process.HasExited) {
-            if (Test-Path $startupLog) {
-              Write-Host "---- NovaClip startup.log ----"
-              Get-Content $startupLog
-            }
             throw "NovaClip.exe exited during the startup smoke-test window with exit code $($process.ExitCode)."
+          }
+          if ($logText -notmatch "Main window activated and startup completed\.") {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "NovaClip stayed alive but did not complete startup."
+          }
+          if ($logText -notmatch "Navigation completed: BrowserPage\.") {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "NovaClip opened a process/window but BrowserPage did not load successfully."
+          }
+          if ($logText -match "\[ERROR\] NovaClip startup failed\.") {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "NovaClip wrote a startup failure to startup.log."
           }
           Stop-Process -Id $process.Id -Force
       - name: Build coverage installer
@@ -58,7 +69,7 @@ jobs:
           $bundle = "artifacts\windows\NovaClip-win-x64-${{ github.sha }}"
           New-Item -ItemType Directory -Force -Path $bundle | Out-Null
           Copy-Item "artifacts\windows\NovaClip-win-x64-portable.zip" $bundle -Force
-          Copy-Item "artifacts\windows\NovaClip-1.0.0-beta.2-win-x64-setup.exe" $bundle -Force
+          Copy-Item "artifacts\windows\NovaClip-1.0.0-beta.3-win-x64-setup.exe" $bundle -Force
           Compress-Archive -Path "$bundle\*" -DestinationPath "artifacts\windows\NovaClip-win-x64-${{ github.sha }}.zip" -CompressionLevel Optimal
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -67,11 +78,11 @@ jobs:
           path: |
             artifacts/windows/NovaClip-win-x64-${{ github.sha }}.zip
             artifacts/windows/NovaClip-win-x64-portable.zip
-            artifacts/windows/NovaClip-1.0.0-beta.2-win-x64-setup.exe
+            artifacts/windows/NovaClip-1.0.0-beta.3-win-x64-setup.exe
           if-no-files-found: error
 
   release:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/tags/v1.0.0-beta.2'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/tags/v1.0.0-beta.3'
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -83,12 +94,12 @@ jobs:
       - name: Publish GitHub prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0-beta.2
-          name: NovaClip 1.0.0-beta.2
+          tag_name: v1.0.0-beta.3
+          name: NovaClip 1.0.0-beta.3
           target_commitish: ${{ github.sha }}
           prerelease: true
           generate_release_notes: true
           files: |
             release-assets/NovaClip-win-x64-portable.zip
-            release-assets/NovaClip-1.0.0-beta.2-win-x64-setup.exe
+            release-assets/NovaClip-1.0.0-beta.3-win-x64-setup.exe
             release-assets/NovaClip-win-x64-${{ github.sha }}.zip

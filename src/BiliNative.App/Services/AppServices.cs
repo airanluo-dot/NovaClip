@@ -5,7 +5,7 @@ namespace BiliNative.App;
 
 public static class AppServices
 {
-    public const string CurrentVersion = "1.0.0-beta.2";
+    public const string CurrentVersion = "1.0.0-beta.3";
 
     public static WindowsSettingsStore Settings { get; } = new();
     public static SqliteDownloadTaskRepository Repository { get; } = new(ResolveDatabasePath());

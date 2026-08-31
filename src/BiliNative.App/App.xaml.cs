@@ -43,7 +43,7 @@ public partial class App : Application
             await AppServices.InitializeAsync();
             MainWindow = new MainWindow();
             MainWindow.Activate();
-            StartupDiagnostics.Info("Main window activated.");
+            StartupDiagnostics.Info("Main window activated and startup completed.");
             _ = AppServices.UpdateCoordinator.CheckSilentlyAsync();
         }
         catch (Exception exception)
@@ -62,24 +62,22 @@ public partial class App : Application
     {
         try
         {
-            var message = new TextBlock
+            var panel = new StackPanel { Spacing = 12 };
+            panel.Children.Add(new TextBlock { Text = "NovaClip 启动失败", FontSize = 28, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+            panel.Children.Add(new TextBlock
             {
-                Text = "NovaClip 无法完成启动。错误详情已经写入启动日志。\n\n" + exception.Message,
+                Text = "NovaClip 无法完成启动。错误详情已经写入启动日志。\n\n" + exception,
                 TextWrapping = TextWrapping.Wrap,
                 IsTextSelectionEnabled = true
-            };
-            var logPath = new TextBlock
+            });
+            panel.Children.Add(new TextBlock { Text = "启动日志：" });
+            panel.Children.Add(new TextBlock
             {
                 Text = StartupDiagnostics.LogPath,
                 TextWrapping = TextWrapping.Wrap,
                 IsTextSelectionEnabled = true,
                 Opacity = 0.7
-            };
-            var panel = new StackPanel { Spacing = 12 };
-            panel.Children.Add(new TextBlock { Text = "NovaClip 启动失败", FontSize = 28, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-            panel.Children.Add(message);
-            panel.Children.Add(new TextBlock { Text = "启动日志：" });
-            panel.Children.Add(logPath);
+            });
 
             _failureWindow = new Window
             {

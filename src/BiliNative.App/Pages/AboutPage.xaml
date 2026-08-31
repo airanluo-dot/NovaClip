@@ -7,7 +7,7 @@
             <Image Source="/assets/icons/NovaClip.png" Width="128" Height="128" HorizontalAlignment="Left" />
             <TextBlock Text="NovaClip" FontSize="32" FontWeight="SemiBold" />
             <TextBlock Text="Bilibili 原生 Windows 下载管理器" FontSize="18" Opacity="0.75" />
-            <TextBlock Text="版本 1.0.0-beta.2" />
+            <TextBlock Text="版本 1.0.0-beta.3" />
             <TextBlock Text="使用 WinUI 3、WebView2、原生流式下载和 FFmpeg remux。应用不上传 Cookie、播放地址或媒体文件，也不实现 DRM 或会员权限绕过。" TextWrapping="Wrap" />
             <TextBlock Text="更新机制：稳定版和测试版均支持 GitHub Release 检查；安装版使用覆盖安装器，便携版使用独立更新器替换应用目录。" TextWrapping="Wrap" Opacity="0.8" />
         </StackPanel>
