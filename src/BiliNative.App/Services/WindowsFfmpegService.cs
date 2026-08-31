@@ -12,6 +12,8 @@ public sealed class WindowsFfmpegService : IFfmpegService
         _settings = settings;
     }
 
+    public bool IsAvailable => FindFfmpeg() is not null;
+
     public async Task<FfmpegResult> MergeAsync(string videoPath, string audioPath, string outputPath, IProgress<double>? progress, CancellationToken cancellationToken)
     {
         var executable = FindFfmpeg();

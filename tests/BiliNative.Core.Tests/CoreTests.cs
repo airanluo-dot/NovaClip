@@ -23,6 +23,16 @@ public sealed class CoreTests
     }
 
     [Theory]
+    [InlineData(DownloadTaskState.DownloadingVideo, DownloadTaskState.Finalizing)]
+    [InlineData(DownloadTaskState.DownloadingAudio, DownloadTaskState.Finalizing)]
+    [InlineData(DownloadTaskState.DownloadingSegments, DownloadTaskState.Finalizing)]
+    [InlineData(DownloadTaskState.Failed, DownloadTaskState.Resolving)]
+    public void StateMachineAllowsRealDownloadCompletionAndRetryPaths(DownloadTaskState from, DownloadTaskState to)
+    {
+        Assert.True(DownloadTaskStateMachine.CanTransition(from, to));
+    }
+
+    [Theory]
     [InlineData("v1.0.0-beta.1", "1.0.0-beta.2", true)]
     [InlineData("1.0.0-beta.2", "1.0.0", true)]
     [InlineData("1.0.0", "1.0.0-beta.9", false)]

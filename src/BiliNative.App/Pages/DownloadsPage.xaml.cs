@@ -31,8 +31,8 @@ public sealed partial class DownloadsPage : Page
     private async void PauseResumeButton_Click(object sender, RoutedEventArgs e)
     {
         if (TaskList.SelectedItem is not DownloadRow row) return;
-        if (row.State == DownloadTaskState.Paused) await AppServices.Downloads.ResumeAsync(row.Id);
-        else if (row.State is not (DownloadTaskState.Completed or DownloadTaskState.Cancelled or DownloadTaskState.Failed)) await AppServices.Downloads.PauseAsync(row.Id);
+        if (row.State is DownloadTaskState.Paused or DownloadTaskState.Failed) await AppServices.Downloads.ResumeAsync(row.Id);
+        else if (row.State is not (DownloadTaskState.Completed or DownloadTaskState.Cancelled)) await AppServices.Downloads.PauseAsync(row.Id);
         StatusText.Text = "已更新任务状态。";
     }
 

@@ -7,9 +7,9 @@ public static class DownloadTaskStateMachine
         {
             [DownloadTaskState.Queued] = [DownloadTaskState.Resolving, DownloadTaskState.Paused, DownloadTaskState.Cancelled],
             [DownloadTaskState.Resolving] = [DownloadTaskState.DownloadingVideo, DownloadTaskState.DownloadingAudio, DownloadTaskState.DownloadingSegments, DownloadTaskState.Paused, DownloadTaskState.Failed, DownloadTaskState.Cancelled],
-            [DownloadTaskState.DownloadingVideo] = [DownloadTaskState.DownloadingAudio, DownloadTaskState.Merging, DownloadTaskState.Paused, DownloadTaskState.Failed, DownloadTaskState.Cancelled],
-            [DownloadTaskState.DownloadingAudio] = [DownloadTaskState.DownloadingVideo, DownloadTaskState.Merging, DownloadTaskState.Paused, DownloadTaskState.Failed, DownloadTaskState.Cancelled],
-            [DownloadTaskState.DownloadingSegments] = [DownloadTaskState.Merging, DownloadTaskState.Paused, DownloadTaskState.Failed, DownloadTaskState.Cancelled],
+            [DownloadTaskState.DownloadingVideo] = [DownloadTaskState.DownloadingAudio, DownloadTaskState.Merging, DownloadTaskState.Finalizing, DownloadTaskState.Paused, DownloadTaskState.Failed, DownloadTaskState.Cancelled],
+            [DownloadTaskState.DownloadingAudio] = [DownloadTaskState.DownloadingVideo, DownloadTaskState.Merging, DownloadTaskState.Finalizing, DownloadTaskState.Paused, DownloadTaskState.Failed, DownloadTaskState.Cancelled],
+            [DownloadTaskState.DownloadingSegments] = [DownloadTaskState.Merging, DownloadTaskState.Finalizing, DownloadTaskState.Paused, DownloadTaskState.Failed, DownloadTaskState.Cancelled],
             [DownloadTaskState.Paused] = [DownloadTaskState.Resolving, DownloadTaskState.Cancelled],
             [DownloadTaskState.Merging] = [DownloadTaskState.Finalizing, DownloadTaskState.Paused, DownloadTaskState.Failed, DownloadTaskState.Cancelled],
             [DownloadTaskState.Finalizing] = [DownloadTaskState.Completed, DownloadTaskState.Failed, DownloadTaskState.Cancelled],

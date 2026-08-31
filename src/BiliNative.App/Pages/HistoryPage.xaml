@@ -3,6 +3,10 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
         <StackPanel>
             <TextBlock Text="历史" FontSize="28" FontWeight="SemiBold" />
             <TextBlock Text="已完成和失败的下载记录" Opacity="0.7" />

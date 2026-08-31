@@ -14,6 +14,7 @@ public sealed partial class BrowserPage : Page
     private BilibiliPageContext? _pageContext;
     private MediaDescriptor? _currentMedia;
     private List<MediaTrack> _videoTracks = [];
+    private string? _lastPlayUrlUri;
     private bool _initialized;
 
     public BrowserPage()
@@ -48,6 +49,7 @@ public sealed partial class BrowserPage : Page
         }
         catch (Exception exception)
         {
+            StartupDiagnostics.Warning("WebView2 initialization failed.", exception);
             StatusText.Text = $"WebView2 初始化失败：{exception.Message}";
         }
     }
@@ -63,6 +65,7 @@ public sealed partial class BrowserPage : Page
         if (message.Type == BilibiliBridgeMessageType.PageContextChanged && BilibiliBridgeMessageParser.TryReadPageContext(message, out var context))
         {
             _pageContext = context;
+            _lastPlayUrlUri = null;
             DispatcherQueue.TryEnqueue(() =>
             {
                 _currentMedia = null;
@@ -87,6 +90,7 @@ public sealed partial class BrowserPage : Page
             using var reader = new StreamReader(stream.AsStreamForRead());
             var json = await reader.ReadToEndAsync();
             if (json.Length > 10_000_000) return;
+            _lastPlayUrlUri = requestUri;
             var context = _pageContext is not null
                 ? new PlayUrlContext(_pageContext.Url, _pageContext.Title, _pageContext.Bvid, _pageContext.Aid, _pageContext.Cid, _pageContext.EpisodeId, _pageContext.EpisodeTitle, _pageContext.Kind.Equals("bangumi", StringComparison.OrdinalIgnoreCase), ResolverStrategy.PlayUrlResponse)
                 : ContextFromPlayUrl(uri);
@@ -95,6 +99,7 @@ public sealed partial class BrowserPage : Page
         }
         catch (Exception exception)
         {
+            StartupDiagnostics.Warning("PlayURL response could not be read.", exception);
             DispatcherQueue.TryEnqueue(() => StatusText.Text = $"读取播放信息失败：{exception.Message}");
         }
     }
@@ -118,22 +123,43 @@ public sealed partial class BrowserPage : Page
             QualityCombo.Items.Add($"{quality} · {track.Codec ?? "未知编码"} · {FormatBytes(track.Size)}");
         }
         if (QualityCombo.Items.Count > 0) QualityCombo.SelectedIndex = 0;
+        else if (result.Media.LegacySegments.Count > 0) QualityCombo.PlaceholderText = $"DURL · {result.Media.LegacySegments.Count} 个分段";
+
         TitleText.Text = result.Media.Title;
         IdentityText.Text = $"{result.Media.Bvid ?? "未识别 BV"} · CID {result.Media.Cid?.ToString(CultureInfo.InvariantCulture) ?? "未知"} · 来源 {result.Media.Source}";
-        TrackText.Text = $"视频 {result.Media.VideoTrack?.Codec ?? "—"} · 音频 {result.Media.AudioTrack?.Codec ?? "—"} · {result.Media.Tracks.Count} 条轨道";
-        StatusText.Text = result.Media.Tracks.Count > 0 ? "已捕获可用媒体轨道。" : "已捕获信息，但没有可用轨道。";
-        AddDownloadButton.IsEnabled = _videoTracks.Count > 0;
+        TrackText.Text = result.Media.LegacySegments.Count > 0 && result.Media.Tracks.Count == 0
+            ? $"DURL · {result.Media.LegacySegments.Count} 个分段"
+            : $"视频 {result.Media.VideoTrack?.Codec ?? "—"} · 音频 {result.Media.AudioTrack?.Codec ?? "—"} · {result.Media.Tracks.Count} 条轨道";
+        StatusText.Text = result.Media.Tracks.Count > 0 || result.Media.LegacySegments.Count > 0 ? "已捕获可用媒体轨道。" : "已捕获信息，但没有可用轨道。";
+        AddDownloadButton.IsEnabled = _videoTracks.Count > 0 || result.Media.LegacySegments.Count > 0;
     }
 
     private async void AddDownloadButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentMedia is null || _videoTracks.Count == 0) return;
+        if (_currentMedia is null) return;
         try
         {
-            var video = _videoTracks[Math.Clamp(QualityCombo.SelectedIndex, 0, _videoTracks.Count - 1)];
-            var audio = _currentMedia.Tracks.FirstOrDefault(track => track.Type == TrackType.Audio);
+            MediaTrack? video = null;
+            MediaTrack? audio = null;
+
+            if (_videoTracks.Count > 0)
+            {
+                video = _videoTracks[Math.Clamp(QualityCombo.SelectedIndex, 0, _videoTracks.Count - 1)];
+                audio = _currentMedia.Tracks.FirstOrDefault(track => track.Type == TrackType.Audio);
+                if (audio is not null && AppServices.Settings.MergeAfterDownload && !AppServices.Ffmpeg.IsAvailable)
+                {
+                    StatusText.Text = "当前视频需要合并音视频，但未找到 FFmpeg。请先在“设置”中指定 ffmpeg.exe。";
+                    return;
+                }
+            }
+            else if (_currentMedia.LegacySegments.Count == 0)
+            {
+                return;
+            }
+
             var title = AppServices.FileNames.Sanitize(_currentMedia.Title, "Bilibili video");
             var outputFile = AppServices.FileNames.GetAvailablePath(AppServices.Settings.DownloadDirectory, $"{title}.mp4");
+            var requestHeaders = await CaptureRequestHeadersAsync();
             var request = new DownloadRequest(
                 Guid.NewGuid(),
                 _currentMedia,
@@ -143,14 +169,53 @@ public sealed partial class BrowserPage : Page
                 Path.GetFileName(outputFile),
                 new RetryPolicy(AppServices.Settings.MaxRetryAttempts),
                 AppServices.Settings.MergeAfterDownload,
-                AppServices.Settings.DeleteTemporaryFilesAfterMerge);
+                AppServices.Settings.DeleteTemporaryFilesAfterMerge,
+                requestHeaders);
             await AppServices.Downloads.EnqueueAsync(request);
             StatusText.Text = "已加入下载队列，可在“下载”页面查看进度。";
         }
         catch (Exception exception)
         {
+            StartupDiagnostics.Warning("Failed to create download task.", exception);
             StatusText.Text = $"创建下载任务失败：{exception.Message}";
         }
+    }
+
+    private async Task<MediaRequestHeaders> CaptureRequestHeadersAsync()
+    {
+        var pageUrl = _currentMedia?.PageUrl ?? AddressBox.Text;
+        var core = BrowserWebView.CoreWebView2;
+        if (core is null)
+        {
+            return new MediaRequestHeaders(pageUrl, "https://www.bilibili.com", null, null, _lastPlayUrlUri);
+        }
+
+        string? userAgent = null;
+        string? cookieHeader = null;
+        try
+        {
+            var scriptResult = await core.ExecuteScriptAsync("navigator.userAgent");
+            userAgent = JsonSerializer.Deserialize<string>(scriptResult);
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Warning("Could not read WebView2 user agent.", exception);
+        }
+
+        try
+        {
+            var cookies = await core.CookieManager.GetCookiesAsync(pageUrl);
+            cookieHeader = string.Join("; ", cookies
+                .GroupBy(cookie => cookie.Name, StringComparer.Ordinal)
+                .Select(group => group.Last())
+                .Select(cookie => $"{cookie.Name}={cookie.Value}"));
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Warning("Could not copy Bilibili cookies into the in-memory download request.", exception);
+        }
+
+        return new MediaRequestHeaders(pageUrl, "https://www.bilibili.com", userAgent, cookieHeader, _lastPlayUrlUri);
     }
 
     private void OpenButton_Click(object sender, RoutedEventArgs e)

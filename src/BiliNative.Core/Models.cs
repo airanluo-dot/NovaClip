@@ -37,6 +37,13 @@ public enum UpdateChannel
 
 public sealed record MediaUrlCandidate(string Url, string? Fingerprint = null);
 
+public sealed record MediaRequestHeaders(
+    string? Referer = null,
+    string? Origin = null,
+    string? UserAgent = null,
+    string? Cookie = null,
+    string? RefreshUrl = null);
+
 public sealed record QualityOption(
     int Id,
     string Description,
@@ -105,7 +112,8 @@ public sealed record DownloadRequest(
     string OutputFileName,
     RetryPolicy RetryPolicy,
     bool MergeAfterDownload = true,
-    bool DeleteTemporaryFilesAfterMerge = true);
+    bool DeleteTemporaryFilesAfterMerge = true,
+    MediaRequestHeaders? RequestHeaders = null);
 
 public sealed record TrackProgress(
     TrackType TrackType,
@@ -183,7 +191,8 @@ public sealed record AppUpdateAsset(
     string Name,
     string DownloadUrl,
     long? Size,
-    string? ContentType);
+    string? ContentType,
+    string? Digest = null);
 
 public sealed record AppUpdateInfo(
     string Version,
