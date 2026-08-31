@@ -34,7 +34,7 @@ public sealed partial class BrowserPage : Page
         {
             var profilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NovaClip", "WebView2");
             Directory.CreateDirectory(profilePath);
-            var environment = await CoreWebView2Environment.CreateAsync(null, profilePath, null);
+            var environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, profilePath, null);
             await BrowserWebView.EnsureCoreWebView2Async(environment);
             var core = BrowserWebView.CoreWebView2;
             core.WebMessageReceived += Core_WebMessageReceived;
