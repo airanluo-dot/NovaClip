@@ -21,7 +21,7 @@ public sealed class WindowsSettingsStore
     public bool AutoCheckUpdates { get; set; } = true;
     public UpdateChannel UpdateChannel { get; set; } = UpdateChannel.Preview;
     public string UpdateFeedRepository { get; set; } = "airanluo-dot/NovaClip";
-    public string? GitHubToken => Environment.GetEnvironmentVariable("NOVACLIP_GITHUB_TOKEN");
+    public static string? GitHubToken => Environment.GetEnvironmentVariable("NOVACLIP_GITHUB_TOKEN");
 
     public async Task LoadAsync()
     {

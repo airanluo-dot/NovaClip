@@ -50,7 +50,7 @@ public static class AppServices
         Downloader = new HttpRangeDownloader(MediaHttpClient);
         Ffmpeg = new WindowsFfmpegService(Settings);
         Downloads = new DownloadManager(Downloader, Ffmpeg, Repository, Repository, Settings.MaxConcurrentTasks);
-        UpdateService = new GitHubReleaseUpdateService(UpdateHttpClient, Settings.UpdateFeedRepository, Settings.GitHubToken);
+        UpdateService = new GitHubReleaseUpdateService(UpdateHttpClient, Settings.UpdateFeedRepository, WindowsSettingsStore.GitHubToken);
         UpdateCoordinator = new WindowsUpdateCoordinator(UpdateService, Settings);
 
         StartupDiagnostics.Info("Initializing SQLite repository.");
