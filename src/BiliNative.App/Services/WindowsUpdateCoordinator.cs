@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Compression;
 using BiliNative.Core;
 using BiliNative.Infrastructure;
@@ -55,7 +56,7 @@ public sealed class WindowsUpdateCoordinator
                 CreateNoWindow = true
             };
             info.ArgumentList.Add("--pid");
-            info.ArgumentList.Add(Environment.ProcessId.ToString());
+            info.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             info.ArgumentList.Add("--source");
             info.ArgumentList.Add(extracted);
             info.ArgumentList.Add("--target");
