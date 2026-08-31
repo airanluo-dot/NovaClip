@@ -29,7 +29,8 @@ public partial class App : Application
         {
             var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
             SynchronizationContext.SetSynchronizationContext(context);
-            new App();
+            var app = new App();
+            GC.KeepAlive(app);
         });
     }
 }
