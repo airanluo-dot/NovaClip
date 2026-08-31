@@ -6,8 +6,8 @@
 #endif
 
 #define ProductName "NovaClip"
-#define ProductVersion "1.0.0.1"
-#define DisplayVersion "1.0.0-beta.1"
+#define ProductVersion "1.0.0.2"
+#define DisplayVersion "1.0.0-beta.2"
 #define ProductPublisher "Aren Vox"
 #define ProductExe "NovaClip.exe"
 
@@ -25,7 +25,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
 OutputDir={#OutputDir}
-OutputBaseFilename=NovaClip-1.0.0-beta.1-win-x64-setup
+OutputBaseFilename=NovaClip-1.0.0-beta.2-win-x64-setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern

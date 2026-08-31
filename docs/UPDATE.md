@@ -1,15 +1,22 @@
 # Update design
 
-The first beta deliberately supports two coverage-update mechanisms.
+NovaClip 1.0.0-beta.2 supports installed and portable coverage updates.
 
 ## Installed build
 
-The app checks GitHub Releases for a newer semantic version and downloads the `*-setup.exe` asset. After the app exits, Inno Setup runs silently with the same `AppId` and per-user install directory (`%LocalAppData%\\NovaClip`), replacing the existing application files while leaving AppData settings and WebView2 data untouched.
+NovaClip downloads the matching `*-setup.exe` into a temporary directory, validates the GitHub release SHA-256 digest when GitHub provides one, starts `NovaClip.Updater.exe`, and closes the app. The updater waits until NovaClip has exited before launching Inno Setup silently against the same AppId and per-user install directory. It then restarts NovaClip.
 
 ## Portable build
 
-The portable ZIP contains `portable.marker` and `NovaClip.Updater.exe`. The app downloads the newer `*-portable.zip`, extracts it under `%TEMP%`, starts the updater with the current PID, source and target directories, and exits. The updater waits for the app, copies all new files over the target directory, keeps its own executable in place, and restarts `NovaClip.exe`.
+The portable ZIP contains `portable.marker` and `NovaClip.Updater.exe`. NovaClip downloads the newer `*-portable.zip`, verifies the available SHA-256 digest, extracts it under `%TEMP%`, starts the updater with the current PID/source/target paths, and exits. The updater waits, copies files over the target directory, and restarts NovaClip.
 
-## Safety notes
+## Private repository authentication
 
-The beta update source is the GitHub Releases API for `airanluo-dot/NovaClip`. The repository is private during development, so the endpoint is not a public distribution channel. Before public release, add a public signed manifest, asset SHA-256 verification, and a documented key-rotation policy.
+The development repository is private. NovaClip never embeds a GitHub token and never writes one to settings. Developer testing may expose a read-only token to the process through the `NOVACLIP_GITHUB_TOKEN` environment variable. Anonymous public distribution requires a public signed update feed.
+
+## Safety
+
+- Release downloads use the GitHub asset API.
+- SHA-256 is checked before execution whenever the Release API supplies a `digest`.
+- The running NovaClip process exits before files are replaced.
+- A public release should add an independently signed manifest and documented key-rotation policy in addition to GitHub-hosted hashes.
