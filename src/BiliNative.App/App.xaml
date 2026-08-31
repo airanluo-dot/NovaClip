@@ -5,7 +5,7 @@
     xmlns:local="using:BiliNative.App">
     <Application.Resources>
         <ResourceDictionary>
-            <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            <XamlControlsResources x:Key="XamlControlsResources" xmlns="using:Microsoft.UI.Xaml.Controls" />
             <SolidColorBrush x:Key="NovaClipAccentBrush" Color="#8B5CF6" />
         </ResourceDictionary>
     </Application.Resources>
