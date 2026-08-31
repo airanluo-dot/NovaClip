@@ -54,7 +54,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
                     progress.Report(new DownloadProgress(request.TaskId, type, current, totals > 0 ? totals : null, value));
                 }
             });
-            var bytes = await DownloadTrackAsync(item.Track, item.Path, request.RetryPolicy, trackProgress, cancellationToken, request.RequestHeaders).ConfigureAwait(false);
+            var bytes = await DownloadTrackAsync(item.Track, item.Path, request.RetryPolicy, trackProgress, request.RequestHeaders, cancellationToken).ConfigureAwait(false);
             lock (gate) downloadedByTrack[item.Track.TrackId] = bytes;
         });
 
@@ -91,7 +91,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
                     total > 0 ? total : null,
                     value));
             });
-            var bytes = await DownloadTrackAsync(track, segmentPath, request.RetryPolicy, segmentProgress, cancellationToken, request.RequestHeaders).ConfigureAwait(false);
+            var bytes = await DownloadTrackAsync(track, segmentPath, request.RetryPolicy, segmentProgress, request.RequestHeaders, cancellationToken).ConfigureAwait(false);
             completed += bytes;
         }
 
@@ -163,8 +163,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         string destinationPath,
         RetryPolicy retryPolicy,
         IProgress<TrackProgress>? progress,
-        CancellationToken cancellationToken,
-        MediaRequestHeaders? requestHeaders = null)
+        MediaRequestHeaders? requestHeaders,
+        CancellationToken cancellationToken)
     {
         if (track.Urls.Count == 0) throw new InvalidOperationException("The media track has no URL candidates.");
         if (track.Size is long expectedSize && File.Exists(destinationPath))
@@ -184,7 +184,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             try
             {
                 return await _retryExecutor.ExecuteAsync(
-                    token => DownloadCandidateAsync(track, candidate.Url, destinationPath, progress, token, requestHeaders),
+                    token => DownloadCandidateAsync(track, candidate.Url, destinationPath, progress, requestHeaders, token),
                     retryPolicy,
                     IsTransient,
                     cancellationToken).ConfigureAwait(false);
@@ -203,8 +203,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         string url,
         string destinationPath,
         IProgress<TrackProgress>? progress,
-        CancellationToken cancellationToken,
-        MediaRequestHeaders? requestHeaders)
+        MediaRequestHeaders? requestHeaders,
+        CancellationToken cancellationToken)
     {
         var existingLength = File.Exists(destinationPath) ? new FileInfo(destinationPath).Length : 0L;
         using var request = new HttpRequestMessage(HttpMethod.Get, url);

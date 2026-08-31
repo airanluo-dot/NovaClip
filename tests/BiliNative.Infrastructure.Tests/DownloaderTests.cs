@@ -20,7 +20,7 @@ public sealed class DownloaderTests
             var handler = new StaticHandler([1, 2, 3, 4], supportsRange: true);
             var downloader = new HttpRangeDownloader(new HttpClient(handler));
             var track = new MediaTrack { Type = TrackType.Video, TrackId = "video", Urls = [new MediaUrlCandidate("https://cdn.example/video.m4s")], Size = 4 };
-            var received = await downloader.DownloadTrackAsync(track, path, new RetryPolicy(1), null, CancellationToken.None);
+            var received = await downloader.DownloadTrackAsync(track, path, new RetryPolicy(1), null, null, CancellationToken.None);
             Assert.Equal(4, received);
             Assert.Equal(new byte[] { 1, 2, 3, 4 }, await File.ReadAllBytesAsync(path));
             Assert.Equal(2, handler.LastRangeStart);
@@ -42,7 +42,7 @@ public sealed class DownloaderTests
             var handler = new FallbackHandler();
             var downloader = new HttpRangeDownloader(new HttpClient(handler));
             var track = new MediaTrack { Type = TrackType.Audio, TrackId = "audio", Urls = [new MediaUrlCandidate("https://cdn.example/bad"), new MediaUrlCandidate("https://cdn.example/good")], Size = 3 };
-            await downloader.DownloadTrackAsync(track, path, new RetryPolicy(1), null, CancellationToken.None);
+            await downloader.DownloadTrackAsync(track, path, new RetryPolicy(1), null, null, CancellationToken.None);
             Assert.Equal(new byte[] { 9, 8, 7 }, await File.ReadAllBytesAsync(path));
             Assert.Equal(2, handler.RequestCount);
         }
