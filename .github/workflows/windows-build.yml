@@ -1,9 +1,9 @@
-name: Windows build and packages
+name: Windows native build and acceptance
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
+    branches: [main, refactor/beta.4-native-rebuild]
+    tags: ["v1.0.0-beta.4"]
   pull_request:
   workflow_dispatch:
 
@@ -14,102 +14,72 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - name: Restore
-        run: dotnet restore BiliNative.sln
-      - name: Build solution
-        run: dotnet build BiliNative.sln -c Release --no-restore -p:Platform=x64
-      - name: Test solution
-        run: dotnet test BiliNative.sln -c Release --no-build --logger "trx;LogFileName=windows-test-results.trx"
-      - name: Install Inno Setup
-        shell: powershell
-        run: choco install innosetup --no-progress -y
-      - name: Publish app and portable package
-        shell: powershell
-        run: .\scripts\publish-windows.ps1 -Configuration Release -OutputRoot artifacts\windows
-      - name: Verify packaged WinUI resources
-        shell: powershell
+      - name: Restore and build native solution
+        run: |
+          dotnet restore NovaClip.slnx
+          dotnet build NovaClip.slnx -c Release --no-restore -p:Platform=x64
+      - name: Run tests
+        run: dotnet test NovaClip.slnx -c Release --no-build -p:Platform=x64 --logger "trx;LogFileName=native-rebuild.trx"
+      - name: Enforce localization and architecture
+        shell: pwsh
+        run: |
+          ./scripts/check-localization.ps1
+          ./scripts/check-architecture.ps1
+      - name: Publish portable package
+        shell: pwsh
+        run: ./scripts/publish-windows.ps1 -Configuration Release -OutputRoot artifacts/windows
+      - name: Verify WinUI resources
+        shell: pwsh
         run: |
           $publish = Join-Path "${{ github.workspace }}" "publish\win-x64"
-          Write-Host "---- WinUI resource files ----"
-          Get-ChildItem -Path $publish -Recurse -File | Where-Object { $_.Name -match '\.(pri|xbf)$' } | Select-Object FullName, Length
-          $appPri = Join-Path $publish "resources.pri"
-          if (-not (Test-Path $appPri)) {
-            throw "Published unpackaged WinUI app is missing resources.pri; XAML pages would fail at runtime."
-          }
-      - name: Smoke test packaged NovaClip startup
-        shell: powershell
+          if (-not (Test-Path (Join-Path $publish "resources.pri"))) { throw "PUBLISH_MISSING_RESOURCES_PRI" }
+          if (-not (Get-ChildItem $publish -Recurse -Filter *.xbf)) { throw "PUBLISH_MISSING_XBF" }
+      - name: Smoke test real page construction
+        shell: pwsh
         run: |
           $exe = Join-Path "${{ github.workspace }}" "publish\win-x64\NovaClip.exe"
-          $startupLog = Join-Path $env:LOCALAPPDATA "NovaClip\Logs\startup.log"
-          if (Test-Path $startupLog) { Remove-Item $startupLog -Force }
-          $process = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 12
-          $logText = if (Test-Path $startupLog) { Get-Content $startupLog -Raw } else { "" }
-          Write-Host "---- NovaClip startup.log ----"
-          Write-Host $logText
-          if ($process.HasExited) {
-            throw "NovaClip.exe exited during the startup smoke-test window with exit code $($process.ExitCode)."
-          }
-          if ($logText -notmatch "Main window activated and startup completed\.") {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw "NovaClip stayed alive but did not complete startup."
-          }
-          if ($logText -notmatch "Navigation completed: BrowserPage\.") {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw "NovaClip opened a process/window but BrowserPage did not load successfully."
-          }
-          if ($logText -match "\[ERROR\] NovaClip startup failed\.") {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw "NovaClip wrote a startup failure to startup.log."
-          }
-          Stop-Process -Id $process.Id -Force
-      - name: Build coverage installer
-        shell: powershell
-        run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DPublishDir=${{ github.workspace }}\publish\win-x64" "/DOutputDir=${{ github.workspace }}\artifacts\windows" installer\NovaClip.iss
-      - name: Create combined artifact zip
-        shell: powershell
-        run: |
-          $bundle = "artifacts\windows\NovaClip-win-x64-${{ github.sha }}"
-          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
-          Copy-Item "artifacts\windows\NovaClip-win-x64-portable.zip" $bundle -Force
-          Copy-Item "artifacts\windows\NovaClip-1.0.0-beta.3-win-x64-setup.exe" $bundle -Force
-          Compress-Archive -Path "$bundle\*" -DestinationPath "artifacts\windows\NovaClip-win-x64-${{ github.sha }}.zip" -CompressionLevel Optimal
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+          $log = Join-Path $env:LOCALAPPDATA "NovaClip\Logs\startup.log"
+          if (Test-Path $log) { Remove-Item $log -Force }
+          $env:NOVACLIP_CI_SMOKE = "1"
+          $process = Start-Process $exe -PassThru
+          Start-Sleep -Seconds 15
+          $text = if (Test-Path $log) { Get-Content $log -Raw } else { "" }
+          Write-Host $text
+          foreach ($marker in @("App.StartupCompleted", "Shell.Ready", "BrowserPage.Ready", "DownloadsPage.Ready", "HistoryPage.Ready", "SettingsPage.Ready", "WebView2.Ready")) { if ($text -notmatch [regex]::Escape($marker)) { Stop-Process $process.Id -Force -ErrorAction SilentlyContinue; throw "SMOKE_MARKER_MISSING:$marker" } }
+          if ($text -match "APP_STARTUP_FAILED|XamlParseException|NAVIGATION_FAILED") { Stop-Process $process.Id -Force -ErrorAction SilentlyContinue; throw "SMOKE_STARTUP_ERROR" }
+          Stop-Process $process.Id -Force
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Build installer
+        shell: pwsh
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DPublishDir=${{ github.workspace }}\publish\win-x64" "/DOutputDir=${{ github.workspace }}\artifacts\windows" installer\NovaClip.iss'
+      - name: Hash deliverables
+        shell: pwsh
+        run: Get-FileHash artifacts/windows/* -Algorithm SHA256 | Format-Table
+      - uses: actions/upload-artifact@v4
         with:
-          name: NovaClip-win-x64-${{ github.sha }}
+          name: NovaClip-1.0.0-beta.4-win-x64-${{ github.sha }}
           path: |
-            artifacts/windows/NovaClip-win-x64-${{ github.sha }}.zip
             artifacts/windows/NovaClip-win-x64-portable.zip
-            artifacts/windows/NovaClip-1.0.0-beta.3-win-x64-setup.exe
+            artifacts/windows/NovaClip-1.0.0-beta.4-win-x64-setup.exe
           if-no-files-found: error
 
   release:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/tags/v1.0.0-beta.3'
+    if: github.ref == 'refs/tags/v1.0.0-beta.4'
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download Windows package artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: NovaClip-win-x64-${{ github.sha }}
+          name: NovaClip-1.0.0-beta.4-win-x64-${{ github.sha }}
           path: release-assets
-      - name: Publish GitHub prerelease
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0-beta.3
-          name: NovaClip 1.0.0-beta.3
-          target_commitish: ${{ github.sha }}
           prerelease: true
+          name: NovaClip 1.0.0-beta.4 — Native Windows Rebuild
           generate_release_notes: true
-          files: |
-            release-assets/NovaClip-win-x64-portable.zip
-            release-assets/NovaClip-1.0.0-beta.3-win-x64-setup.exe
-            release-assets/NovaClip-win-x64-${{ github.sha }}.zip
+          files: release-assets/*
