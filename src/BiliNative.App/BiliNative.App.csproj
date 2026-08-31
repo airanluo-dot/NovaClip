@@ -9,7 +9,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <WindowsPackageType>None</WindowsPackageType>
-    <EnableMsixTooling>true</EnableMsixTooling>
+    <EnableMsixTooling>false</EnableMsixTooling>
     <UseWinUI>true</UseWinUI>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <PublishSingleFile>false</PublishSingleFile>
@@ -30,4 +30,16 @@
     <Content Include="..\..\assets\icons\NovaClip.png" Link="assets\icons\NovaClip.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\assets\icons\NovaClip.ico" Link="assets\icons\NovaClip.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <!--
+    dotnet publish does not automatically copy the compiled WinUI resource
+    index for this unpackaged app. At runtime XAML pages are resolved from
+    resources.pri next to NovaClip.exe, so copy NovaClip.pri explicitly.
+  -->
+  <Target Name="CopyAppPriToPublish" AfterTargets="Publish">
+    <Copy SourceFiles="$(TargetDir)$(TargetName).pri"
+          DestinationFiles="$(PublishDir)resources.pri"
+          OverwriteReadOnlyFiles="true"
+          SkipUnchangedFiles="false"
+          Condition="Exists('$(TargetDir)$(TargetName).pri')" />
+  </Target>
 </Project>
