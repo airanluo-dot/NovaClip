@@ -40,8 +40,15 @@ public sealed partial class SettingsPage : Page
         settings.DeleteTemporaryFilesAfterMerge = DeleteTempCheckBox.IsChecked == true;
         settings.AutoCheckUpdates = AutoUpdateCheckBox.IsChecked == true;
         settings.UpdateChannel = (UpdateChannelBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() == "Stable" ? UpdateChannel.Stable : UpdateChannel.Preview;
-        settings.Save();
-        UpdateStatusText.Text = "设置已保存。";
+        try
+        {
+            settings.Save();
+            UpdateStatusText.Text = "设置已保存。并发任务数会在下次启动时应用。";
+        }
+        catch (Exception exception)
+        {
+            UpdateStatusText.Text = $"保存设置失败：{exception.Message}";
+        }
     }
 
     private async void CheckUpdateButton_Click(object sender, RoutedEventArgs e)

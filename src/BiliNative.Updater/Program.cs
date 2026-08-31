@@ -9,10 +9,31 @@ internal static class Program
         try
         {
             var options = Parse(args);
-            if (!options.TryGetValue("pid", out var pidText) || !int.TryParse(pidText, out var pid) || !options.TryGetValue("source", out var source) || !options.TryGetValue("target", out var target)) return 2;
+            if (!options.TryGetValue("pid", out var pidText) || !int.TryParse(pidText, out var pid)) return 2;
             WaitForProcess(pid);
-            CopyDirectory(source, target);
-            if (options.TryGetValue("restart", out var restart) && !string.IsNullOrWhiteSpace(restart) && File.Exists(restart)) Process.Start(new ProcessStartInfo(restart) { UseShellExecute = true });
+
+            if (options.TryGetValue("installer", out var installer))
+            {
+                if (!File.Exists(installer)) return 3;
+                using var setup = Process.Start(new ProcessStartInfo(installer)
+                {
+                    UseShellExecute = true,
+                    Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+                });
+                if (setup is null) return 4;
+                setup.WaitForExit();
+                if (setup.ExitCode != 0) return setup.ExitCode;
+            }
+            else
+            {
+                if (!options.TryGetValue("source", out var source) || !options.TryGetValue("target", out var target)) return 2;
+                CopyDirectory(source, target);
+            }
+
+            if (options.TryGetValue("restart", out var restart) && !string.IsNullOrWhiteSpace(restart) && File.Exists(restart))
+            {
+                Process.Start(new ProcessStartInfo(restart) { UseShellExecute = true });
+            }
             return 0;
         }
         catch
@@ -36,7 +57,7 @@ internal static class Program
         try
         {
             using var process = Process.GetProcessById(pid);
-            process.WaitForExit(60_000);
+            if (!process.WaitForExit(60_000)) throw new TimeoutException("NovaClip did not exit before the update timeout.");
         }
         catch (ArgumentException)
         {

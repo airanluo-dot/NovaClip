@@ -54,7 +54,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
                     progress.Report(new DownloadProgress(request.TaskId, type, current, totals > 0 ? totals : null, value));
                 }
             });
-            var bytes = await DownloadTrackAsync(item.Track, item.Path, request.RetryPolicy, trackProgress, cancellationToken).ConfigureAwait(false);
+            var bytes = await DownloadTrackAsync(item.Track, item.Path, request.RetryPolicy, trackProgress, cancellationToken, request.RequestHeaders).ConfigureAwait(false);
             lock (gate) downloadedByTrack[item.Track.TrackId] = bytes;
         });
 
@@ -91,7 +91,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
                     total > 0 ? total : null,
                     value));
             });
-            var bytes = await DownloadTrackAsync(track, segmentPath, request.RetryPolicy, segmentProgress, cancellationToken).ConfigureAwait(false);
+            var bytes = await DownloadTrackAsync(track, segmentPath, request.RetryPolicy, segmentProgress, cancellationToken, request.RequestHeaders).ConfigureAwait(false);
             completed += bytes;
         }
 
@@ -129,6 +129,13 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             retryAttempts = request.RetryPolicy.MaxAttempts,
             mergeAfterDownload = request.MergeAfterDownload,
             deleteTemporaryFiles = request.DeleteTemporaryFilesAfterMerge,
+            requestHeaders = request.RequestHeaders is null ? null : new
+            {
+                referer = request.RequestHeaders.Referer,
+                origin = request.RequestHeaders.Origin,
+                userAgent = request.RequestHeaders.UserAgent,
+                refreshUrl = request.RequestHeaders.RefreshUrl
+            },
             tracks = request.VideoTrack is not null || request.AudioTrack is not null
                 ? new[] { request.VideoTrack, request.AudioTrack }.Where(track => track is not null).Select(track => new
                 {
@@ -156,7 +163,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         string destinationPath,
         RetryPolicy retryPolicy,
         IProgress<TrackProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MediaRequestHeaders? requestHeaders = null)
     {
         if (track.Urls.Count == 0) throw new InvalidOperationException("The media track has no URL candidates.");
         if (track.Size is long expectedSize && File.Exists(destinationPath))
@@ -176,7 +184,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             try
             {
                 return await _retryExecutor.ExecuteAsync(
-                    token => DownloadCandidateAsync(track, candidate.Url, destinationPath, progress, token),
+                    token => DownloadCandidateAsync(track, candidate.Url, destinationPath, progress, token, requestHeaders),
                     retryPolicy,
                     IsTransient,
                     cancellationToken).ConfigureAwait(false);
@@ -195,10 +203,12 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         string url,
         string destinationPath,
         IProgress<TrackProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MediaRequestHeaders? requestHeaders)
     {
         var existingLength = File.Exists(destinationPath) ? new FileInfo(destinationPath).Length : 0L;
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        ApplyRequestHeaders(request, requestHeaders);
         if (existingLength > 0) request.Headers.Range = new RangeHeaderValue(existingLength, null);
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
 
@@ -236,6 +246,19 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         }
 
         return downloaded;
+    }
+
+    private static void ApplyRequestHeaders(HttpRequestMessage request, MediaRequestHeaders? headers)
+    {
+        request.Headers.Accept.TryParseAdd("*/*");
+        if (headers is null) return;
+        if (!string.IsNullOrWhiteSpace(headers.Referer) && Uri.TryCreate(headers.Referer, UriKind.Absolute, out var referer))
+        {
+            request.Headers.Referrer = referer;
+        }
+        if (!string.IsNullOrWhiteSpace(headers.Origin)) request.Headers.TryAddWithoutValidation("Origin", headers.Origin);
+        if (!string.IsNullOrWhiteSpace(headers.UserAgent)) request.Headers.UserAgent.TryParseAdd(headers.UserAgent);
+        if (!string.IsNullOrWhiteSpace(headers.Cookie)) request.Headers.TryAddWithoutValidation("Cookie", headers.Cookie);
     }
 
     private static long? GetTotalLength(HttpResponseMessage response, long startingLength)

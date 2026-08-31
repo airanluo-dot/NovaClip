@@ -30,7 +30,8 @@ public sealed class WindowsUpdateCoordinator
     public async Task CheckSilentlyAsync()
     {
         if (!_settings.AutoCheckUpdates) return;
-        try { await CheckAsync().ConfigureAwait(false); } catch { /* Update checks must never block startup. */ }
+        try { await CheckAsync().ConfigureAwait(false); }
+        catch (Exception exception) { StartupDiagnostics.Warning("Silent update check failed.", exception); }
     }
 
     public async Task<bool> DownloadAndApplyAsync(AppUpdateInfo update, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
@@ -38,43 +39,43 @@ public sealed class WindowsUpdateCoordinator
         var usePortable = AppServices.IsPortableInstall;
         var asset = usePortable ? update.PortableAsset ?? update.SetupAsset : update.SetupAsset ?? update.PortableAsset;
         if (asset is null) return false;
+
+        var updater = Path.Combine(AppContext.BaseDirectory, "NovaClip.Updater.exe");
+        if (!File.Exists(updater)) return false;
+
         var tempRoot = Path.Combine(Path.GetTempPath(), "NovaClip", update.Version);
         Directory.CreateDirectory(tempRoot);
         var downloadedPath = Path.Combine(tempRoot, asset.Name);
         await _updateService.DownloadAssetAsync(asset, downloadedPath, progress, cancellationToken).ConfigureAwait(false);
+
+        var info = new ProcessStartInfo(updater)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        info.ArgumentList.Add("--pid");
+        info.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
 
         if (usePortable && asset.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
         {
             var extracted = Path.Combine(tempRoot, "extracted");
             if (Directory.Exists(extracted)) Directory.Delete(extracted, true);
             ZipFile.ExtractToDirectory(downloadedPath, extracted);
-            var updater = Path.Combine(AppContext.BaseDirectory, "NovaClip.Updater.exe");
-            if (!File.Exists(updater)) return false;
-            var info = new ProcessStartInfo(updater)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            info.ArgumentList.Add("--pid");
-            info.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             info.ArgumentList.Add("--source");
             info.ArgumentList.Add(extracted);
             info.ArgumentList.Add("--target");
             info.ArgumentList.Add(AppContext.BaseDirectory);
-            info.ArgumentList.Add("--restart");
-            info.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "NovaClip.exe"));
-            Process.Start(info);
         }
         else
         {
-            var info = new ProcessStartInfo(downloadedPath)
-            {
-                UseShellExecute = true,
-                Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
-            };
-            Process.Start(info);
+            info.ArgumentList.Add("--installer");
+            info.ArgumentList.Add(downloadedPath);
         }
 
+        info.ArgumentList.Add("--restart");
+        info.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "NovaClip.exe"));
+
+        if (Process.Start(info) is null) return false;
         App.MainWindow?.Close();
         return true;
     }

@@ -63,10 +63,14 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
 
     public Task ResumeAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
-        if (_work.TryGetValue(taskId, out var work) && work.Snapshot.State == DownloadTaskState.Paused)
+        if (_work.TryGetValue(taskId, out var work) && work.Snapshot.State is DownloadTaskState.Paused or DownloadTaskState.Failed)
         {
             work.PauseRequested = false;
+            work.CancelRequested = false;
+            work.StopSource.Dispose();
             work.StopSource = new CancellationTokenSource();
+            work.Snapshot = work.Snapshot with { ErrorCode = null, ErrorMessage = null, UpdatedAt = DateTimeOffset.UtcNow };
+            Publish(work.Snapshot);
             _ = RunAsync(work, cancellationToken);
         }
         return Task.CompletedTask;
@@ -267,7 +271,13 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
                 outputFileName,
                 new RetryPolicy(Math.Clamp(manifest.RetryAttempts, 1, 8)),
                 manifest.MergeAfterDownload,
-                manifest.DeleteTemporaryFiles);
+                manifest.DeleteTemporaryFiles,
+                manifest.RequestHeaders is null ? null : new MediaRequestHeaders(
+                    manifest.RequestHeaders.Referer,
+                    manifest.RequestHeaders.Origin,
+                    manifest.RequestHeaders.UserAgent,
+                    null,
+                    manifest.RequestHeaders.RefreshUrl));
         }
         catch (JsonException)
         {
@@ -288,7 +298,16 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
         public int RetryAttempts { get; set; } = 3;
         public bool MergeAfterDownload { get; set; } = true;
         public bool DeleteTemporaryFiles { get; set; } = true;
+        public ManifestRequestHeaders? RequestHeaders { get; set; }
         public List<ManifestTrack> Tracks { get; set; } = [];
+    }
+
+    private sealed class ManifestRequestHeaders
+    {
+        public string? Referer { get; set; }
+        public string? Origin { get; set; }
+        public string? UserAgent { get; set; }
+        public string? RefreshUrl { get; set; }
     }
 
     private sealed class ManifestTrack
