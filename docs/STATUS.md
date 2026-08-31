@@ -1,31 +1,17 @@
-# Status — 1.0.0-beta.3
+# Status — 1.0.0-beta.4 Native Windows Rebuild
 
-## Real-device startup hotfix
+Development branch: `refactor/beta.4-native-rebuild`.
 
-A Windows real-device beta.2 log proved that settings, SQLite and task restoration all completed successfully, then MainWindow.InitializeComponent failed with Microsoft.UI.Xaml.Markup.XamlParseException.
+## Implemented
 
-Beta.3 makes MainWindow XAML intentionally minimal and constructs NavigationView, menu items and Frame in C# after the Window component loads. It also catches individual page navigation failures and renders the exception inside the main window instead of making the entire application disappear.
+- New `NovaClip.Contracts`, `Core`, `Bilibili`, `Infrastructure`, `Windows`, `App`, and `Updater` boundaries.
+- XAML-based WinUI 3 shell with Mica, native title bar, NavigationView and native Settings entry.
+- Single-window WebView2 navigation policy, complete navigation events, process-failure reporting, SPA generation isolation, and friendly BV/av/ep/ss address input.
+- Media detection state machine, fingerprints, deduplication, bounded diagnostics and stale-navigation rejection.
+- Typed immediate-save settings with RadioButtons, ComboBox, ToggleSwitch and native file/folder pickers.
+- `zh-CN` and `en-US` resources with parity and hard-coded-string CI gates.
+- Windows packaging for portable ZIP and Inno Setup installer.
 
-## Installer migration
+## Release gate
 
-Beta.1/beta.2 installed executable files directly into %LocalAppData%\NovaClip, the same directory used for persistent data. That also made coverage installs vulnerable to stale binary/XAML resources.
-
-Beta.3 installs binaries into:
-
-%LocalAppData%\NovaClip\App
-
-while settings, SQLite, logs and WebView2 profile remain under:
-
-%LocalAppData%\NovaClip
-
-The AppId is unchanged and UsePreviousAppDir is disabled so running the beta.3 installer over beta.2 migrates the active install path without requiring a manual uninstall.
-
-## CI correction
-
-The beta.2 smoke test only checked that the process stayed alive. A startup-failure window also keeps the process alive, so that test produced a false positive.
-
-Beta.3 requires startup.log to prove both:
-- Main window activated and startup completed.
-- Navigation completed: BrowserPage.
-
-It also fails on a recorded startup failure.
+GitHub Actions must compile and test the solution, verify localization and dependency rules, publish `resources.pri` and XBF resources, launch the packaged executable, construct every top-level page, and observe `App.StartupCompleted` plus every `Page.Ready` marker. A beta.4 tag is not created until those checks are green.
