@@ -34,7 +34,7 @@ public sealed partial class BrowserPage : Page
         {
             var profilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NovaClip", "WebView2");
             Directory.CreateDirectory(profilePath);
-            var environment = await CoreWebView2Environment.CreateAsync(null, profilePath);
+            var environment = await CoreWebView2Environment.CreateAsync(null, profilePath, null);
             await BrowserWebView.EnsureCoreWebView2Async(environment);
             var core = BrowserWebView.CoreWebView2;
             core.WebMessageReceived += Core_WebMessageReceived;
@@ -82,8 +82,8 @@ public sealed partial class BrowserPage : Page
         if (!Uri.TryCreate(requestUri, UriKind.Absolute, out var uri) || !IsBilibiliHost(uri.Host)) return;
         try
         {
-            await using var stream = await args.Response.GetContentAsync();
-            using var reader = new StreamReader(stream);
+            using var stream = await args.Response.GetContentAsync();
+            using var reader = new StreamReader(stream.AsStreamForRead());
             var json = await reader.ReadToEndAsync();
             if (json.Length > 10_000_000) return;
             var context = _pageContext is not null
