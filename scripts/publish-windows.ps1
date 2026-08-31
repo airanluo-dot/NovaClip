@@ -16,11 +16,11 @@ if (Test-Path $portableRoot) { Remove-Item -Recurse -Force $portableRoot }
 if (Test-Path $portableZip) { Remove-Item -Force $portableZip }
 
 dotnet publish (Join-Path $repoRoot "src\BiliNative.App\BiliNative.App.csproj") `
-    --configuration $Configuration --runtime win-x64 --self-contained true `
+    --configuration $Configuration --framework net10.0-windows10.0.17763.0 --runtime win-x64 --self-contained true `
     -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -o $publishRoot
 
 dotnet publish (Join-Path $repoRoot "src\BiliNative.Updater\BiliNative.Updater.csproj") `
-    --configuration $Configuration --runtime win-x64 --self-contained true `
+    --configuration $Configuration --framework net10.0 --runtime win-x64 --self-contained true `
     -o $publishRoot
 
 New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
