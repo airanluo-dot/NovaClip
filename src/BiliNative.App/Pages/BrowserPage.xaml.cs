@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using BiliNative.Core;
 using BiliNative.WebBridge;
@@ -69,7 +70,7 @@ public sealed partial class BrowserPage : Page
                 QualityCombo.Items.Clear();
                 AddDownloadButton.IsEnabled = false;
                 TitleText.Text = context!.Title;
-                IdentityText.Text = $"{context.Bvid ?? "未识别 BV"} · CID {context.Cid?.ToString() ?? "等待播放"}";
+                IdentityText.Text = $"{context.Bvid ?? "未识别 BV"} · CID {context.Cid?.ToString(CultureInfo.InvariantCulture) ?? "等待播放"}";
                 TrackText.Text = "等待播放器返回 PlayURL…";
             });
         }
@@ -113,12 +114,12 @@ public sealed partial class BrowserPage : Page
         QualityCombo.Items.Clear();
         foreach (var track in _videoTracks)
         {
-            var quality = track.QualityId?.ToString() ?? "Auto";
+            var quality = track.QualityId?.ToString(CultureInfo.InvariantCulture) ?? "Auto";
             QualityCombo.Items.Add($"{quality} · {track.Codec ?? "未知编码"} · {FormatBytes(track.Size)}");
         }
         if (QualityCombo.Items.Count > 0) QualityCombo.SelectedIndex = 0;
         TitleText.Text = result.Media.Title;
-        IdentityText.Text = $"{result.Media.Bvid ?? "未识别 BV"} · CID {result.Media.Cid?.ToString() ?? "未知"} · 来源 {result.Media.Source}";
+        IdentityText.Text = $"{result.Media.Bvid ?? "未识别 BV"} · CID {result.Media.Cid?.ToString(CultureInfo.InvariantCulture) ?? "未知"} · 来源 {result.Media.Source}";
         TrackText.Text = $"视频 {result.Media.VideoTrack?.Codec ?? "—"} · 音频 {result.Media.AudioTrack?.Codec ?? "—"} · {result.Media.Tracks.Count} 条轨道";
         StatusText.Text = result.Media.Tracks.Count > 0 ? "已捕获可用媒体轨道。" : "已捕获信息，但没有可用轨道。";
         AddDownloadButton.IsEnabled = _videoTracks.Count > 0;
