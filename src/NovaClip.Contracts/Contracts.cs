@@ -11,7 +11,7 @@ public sealed record MediaFingerprint(string PageUrl, string? Bvid, long? Aid, l
 public sealed record DetectionDiagnostic(string EventCode, MediaDetectionState State, DateTimeOffset Timestamp, string? Detail = null);
 
 public interface IBrowserNavigationPolicy { BrowserNavigationDecision Evaluate(Uri uri, BrowserNavigationKind kind); }
-public interface IBrowserNavigationService { Uri? CurrentUri { get; } bool CanGoBack { get; } bool CanGoForward { get; } void Navigate(Uri uri); void GoBack(); void GoForward(); void Reload(); void Stop(); }
+public interface IBrowserNavigationService { Uri? CurrentUri { get; } bool CanGoBack { get; } bool CanGoForward { get; } void Navigate(Uri uri); void GoBack(); void GoForward(); void Reload(); void StopLoading(); }
 public interface IBrowserHistoryService { IReadOnlyList<Uri> Entries { get; } }
 public interface IBrowserTab { string Id { get; } Uri? Uri { get; } string? Title { get; } }
 public interface IBrowserTabService { IBrowserTab Current { get; } IReadOnlyList<IBrowserTab> Tabs { get; } }
@@ -49,7 +49,7 @@ public interface IMediaOutputValidator { Task<bool> ValidateAsync(string path, C
 public interface IAudioExtractor { Task ExtractAsync(string source, string destination, CancellationToken cancellationToken); }
 public interface IMediaTranscoder { Task TranscodeAsync(string source, string destination, CancellationToken cancellationToken); }
 
-public interface ISettingsService { T Get<T>(string key, T defaultValue); Task SetAsync<T>(string key, T value, CancellationToken cancellationToken = default); }
+public interface ISettingsService { T GetValue<T>(string key, T defaultValue); Task SetAsync<T>(string key, T value, CancellationToken cancellationToken = default); }
 public interface ISettingsStore { Task<string?> ReadAsync(CancellationToken cancellationToken); Task WriteAtomicAsync(string json, CancellationToken cancellationToken); }
 public interface ISettingsMigrationService { Task MigrateAsync(CancellationToken cancellationToken); }
 public interface ISettingsDefaultsProvider { object GetDefaults(); }
