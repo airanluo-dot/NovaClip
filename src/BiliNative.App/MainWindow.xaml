@@ -1,0 +1,25 @@
+<Window
+    x:Class="BiliNative.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="NovaClip">
+    <Grid>
+        <NavigationView x:Name="RootNavigationView"
+                        IsSettingsVisible="False"
+                        IsBackEnabled="False"
+                        PaneDisplayMode="LeftCompact"
+                        SelectionChanged="RootNavigationView_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="浏览器" Tag="browser" />
+                <NavigationViewItem Content="下载" Tag="downloads" />
+                <NavigationViewItem Content="历史" Tag="history" />
+                <NavigationViewItem Content="设置" Tag="settings" />
+                <NavigationViewItem Content="关于" Tag="about" />
+            </NavigationView.MenuItems>
+            <Frame x:Name="ContentFrame" />
+        </NavigationView>
+    </Grid>
+</Window>

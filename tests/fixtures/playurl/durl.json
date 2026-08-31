@@ -1,0 +1,11 @@
+{
+  "code": 0,
+  "data": {
+    "durl": [{
+      "url": "https://cdn.example/legacy.mp4",
+      "backup_url": ["https://backup.example/legacy.mp4"],
+      "size": 3,
+      "length": 1000
+    }]
+  }
+}

@@ -1,0 +1,22 @@
+## Build output
+bin/
+obj/
+publish/
+artifacts/
+TestResults/
+.vs/
+.dotnet/
+
+## Local application data
+.bilinative/
+*.user
+*.suo
+
+## Developer-only reference material
+reference-audit/
+upload/
+tools/ffmpeg/win-x64/ffmpeg.exe
+
+## OS/editor files
+.DS_Store
+Thumbs.db

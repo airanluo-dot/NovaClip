@@ -1,0 +1,26 @@
+{
+  "code": 0,
+  "data": {
+    "accept_quality": [80, 64],
+    "accept_description": ["1080P 高清", "720P 准高清"],
+    "support_formats": [{"quality": 80, "new_description": "1080P 高清", "codecs": "avc1"}],
+    "dash": {
+      "video": [{
+        "id": 80,
+        "codecid": 7,
+        "codecs": "avc1.640028",
+        "baseUrl": "https://cdn.example/video.m4s",
+        "backupUrl": ["https://backup.example/video.m4s"],
+        "size": 1000,
+        "duration": 10000
+      }],
+      "audio": [{
+        "id": 30280,
+        "codecs": "mp4a.40.2",
+        "base_url": "https://cdn.example/audio.m4s",
+        "backup_url": ["https://backup.example/audio.m4s"],
+        "size": 250
+      }]
+    }
+  }
+}

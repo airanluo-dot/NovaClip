@@ -1,0 +1,38 @@
+# NovaClip architecture
+
+## Boundary
+
+`BiliNative.Core` contains domain models, state transitions, filenames, retry policy and update contracts. It has no Windows UI dependency.
+
+`BiliNative.WebBridge` converts trusted, size-limited JSON from Bilibili into typed page context and media descriptors. It accepts only schema version 1 and Bilibili-origin page URLs.
+
+`BiliNative.Infrastructure` owns streaming HTTP downloads, Range resume, candidate URL fallback, SQLite task/history persistence and GitHub Release update discovery.
+
+`BiliNative.App` hosts WinUI 3, WebView2, the persistent profile, response observation, Windows FFmpeg invocation and the update coordinator.
+
+`BiliNative.Updater` is a small self-contained process. It waits for NovaClip to exit, copies the extracted portable package over the target directory, deliberately leaves the updater executable in place, and starts NovaClip again.
+
+## Media flow
+
+```text
+Bilibili page
+  → WebView2 document-created bridge reports page context
+  → WebResourceResponseReceived observes small /playurl JSON
+  → PlayUrlNormalizer creates MediaTrack candidates
+  → HttpRangeDownloader streams each candidate to .part files
+  → WindowsFfmpegService remuxes video.m4s.part + audio.m4s.part
+  → history repository records the result
+```
+
+The app never downloads media through JavaScript, Blob URLs or a WASM virtual file system.
+
+## Update flow
+
+```text
+Release API → compare semantic version → choose setup/portable asset
+  → setup.exe overwrites install directory
+     or
+  → NovaClip.Updater.exe waits, copies portable files, restarts app
+```
+
+The update service is replaceable so a public signed manifest can be used later without changing the UI or downloader.

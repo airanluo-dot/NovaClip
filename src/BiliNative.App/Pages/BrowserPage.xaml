@@ -1,0 +1,50 @@
+<Page
+    x:Class="BiliNative.App.Pages.BrowserPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+    <Grid Padding="16" RowSpacing="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Button Grid.Column="0" Content="‹" Click="BackButton_Click" ToolTipService.ToolTip="后退" />
+        <Button Grid.Column="1" Content="›" Click="ForwardButton_Click" ToolTipService.ToolTip="前进" />
+        <TextBox Grid.Column="2" x:Name="AddressBox" Margin="8,0" PlaceholderText="输入 B 站视频或番剧地址" />
+        <Button Grid.Column="3" Content="打开" Click="OpenButton_Click" />
+
+        <Grid Grid.Row="1" Grid.ColumnSpan="4" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" />
+                <ColumnDefinition Width="1*" MinWidth="300" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12">
+                <controls:WebView2 x:Name="BrowserWebView" />
+            </Border>
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="当前媒体" FontSize="22" FontWeight="SemiBold" />
+                    <Border Padding="16" CornerRadius="12" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                        <StackPanel Spacing="10">
+                            <TextBlock x:Name="TitleText" Text="打开一个 B 站视频后，这里会显示媒体信息。" TextWrapping="Wrap" FontSize="16" />
+                            <TextBlock x:Name="IdentityText" Text="" Opacity="0.7" TextWrapping="Wrap" />
+                            <TextBlock Text="清晰度 / 编码" FontWeight="SemiBold" />
+                            <ComboBox x:Name="QualityCombo" PlaceholderText="等待播放器返回可用轨道" />
+                            <TextBlock x:Name="TrackText" Text="" Opacity="0.7" TextWrapping="Wrap" />
+                            <Button x:Name="AddDownloadButton" Content="添加到下载" Click="AddDownloadButton_Click" IsEnabled="False" />
+                            <TextBlock x:Name="StatusText" Text="" TextWrapping="Wrap" Foreground="{ThemeResource SystemControlHighlightAccentBrush}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Padding="16" CornerRadius="12" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="工作方式" FontWeight="SemiBold" />
+                            <TextBlock Text="网页由 WebView2 负责，媒体轨道由原生下载引擎流式写入磁盘，音视频使用本机 FFmpeg 无损合并。" TextWrapping="Wrap" Opacity="0.8" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Page>

@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <RootNamespace>BiliNative.Core</RootNamespace>
+    <AssemblyName>BiliNative.Core</AssemblyName>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,25 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+    <WindowsAppSdkVersion>2.2.0</WindowsAppSdkVersion>
+    <WebView2Version>1.0.3719.77</WebView2Version>
+    <WindowsSdkBuildToolsVersion>10.0.26100.7463</WindowsSdkBuildToolsVersion>
+    <SqliteVersion>10.0.8</SqliteVersion>
+    <XunitVersion>2.9.3</XunitVersion>
+    <XunitRunnerVersion>3.1.4</XunitRunnerVersion>
+    <TestSdkVersion>18.9.0</TestSdkVersion>
+    <CoverletVersion>6.0.4</CoverletVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="$(WindowsAppSdkVersion)" />
+    <PackageVersion Include="Microsoft.Web.WebView2" Version="$(WebView2Version)" />
+    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="$(WindowsSdkBuildToolsVersion)" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="$(SqliteVersion)" />
+    <PackageVersion Include="xunit" Version="$(XunitVersion)" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="$(XunitRunnerVersion)" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="$(TestSdkVersion)" />
+    <PackageVersion Include="coverlet.collector" Version="$(CoverletVersion)" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
+  </ItemGroup>
+</Project>
