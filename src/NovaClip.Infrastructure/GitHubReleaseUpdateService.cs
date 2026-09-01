@@ -21,7 +21,7 @@ public sealed class GitHubReleaseUpdateService : IUpdateService
 
         if (_httpClient.DefaultRequestHeaders.UserAgent.Count == 0)
         {
-            _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("NovaClip", "1.0.0-beta.2"));
+            _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("NovaClip", "1.0.0-beta.4"));
         }
         _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
         if (_hasAuthentication)
@@ -38,7 +38,7 @@ public sealed class GitHubReleaseUpdateService : IUpdateService
 
         if (response.StatusCode == HttpStatusCode.NotFound && !_hasAuthentication)
         {
-            throw new InvalidOperationException("更新源是私有 GitHub 仓库。自动更新需要环境变量 NOVACLIP_GITHUB_TOKEN，或改用公开更新源。");
+            throw new InvalidOperationException("GitHub 更新源不存在或不可访问，请确认仓库地址和访问权限。");
         }
         response.EnsureSuccessStatusCode();
 

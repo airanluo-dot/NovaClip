@@ -3,7 +3,7 @@
 ## Cross-platform tests
 
 ```bash
-dotnet test BiliNative.sln -c Release
+dotnet test NovaClip.slnx -c Release
 ```
 
 The tests cover filename sanitization, semantic versions, legal task transitions, 200/206 resume behavior, backup URL fallback, DASH/DURL normalization, permission errors and bridge schema validation.
@@ -15,7 +15,7 @@ The Windows workflow now performs all of these steps before a prerelease is publ
 1. Restore and build the full x64 solution.
 2. Run the unit tests.
 3. Publish the self-contained unpackaged app.
-4. Launch the actual published `NovaClip.exe` and keep it alive for a 10-second startup smoke-test window.
+4. Launch the actual published `NovaClip.exe`, wait up to 60 seconds for the startup markers, and construct every top-level page.
 5. If it exits, print `%LocalAppData%\NovaClip\Logs\startup.log` and fail the workflow.
 6. Build the Inno Setup installer and portable ZIP.
 7. Upload artifacts and publish the prerelease only after the build job succeeds.

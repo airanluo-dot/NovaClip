@@ -2,15 +2,17 @@
 
 ## Boundary
 
-`BiliNative.Core` contains domain models, state transitions, filenames, retry policy and update contracts. It has no Windows UI dependency.
+`NovaClip.Contracts` contains the stable capability and transport contracts shared by the application layers.
 
-`BiliNative.WebBridge` converts trusted, size-limited JSON from Bilibili into typed page context and media descriptors. It accepts only schema version 1 and Bilibili-origin page URLs.
+`NovaClip.Core` contains domain models, state transitions, filenames, retry policy and update contracts. It has no Windows UI dependency.
 
-`BiliNative.Infrastructure` owns streaming HTTP downloads, Range resume, candidate URL fallback, SQLite task/history persistence and GitHub Release update discovery.
+`NovaClip.Bilibili` converts trusted, size-limited JSON from Bilibili into typed page context and media descriptors. It accepts only schema version 1 and Bilibili-origin page URLs.
 
-`BiliNative.App` hosts WinUI 3, WebView2, the persistent profile, response observation, Windows FFmpeg invocation and the update coordinator.
+`NovaClip.Infrastructure` owns streaming HTTP downloads, Range resume, candidate URL fallback, SQLite task/history persistence and GitHub Release update discovery.
 
-`BiliNative.Updater` is a small self-contained process. It waits for NovaClip to exit, copies the extracted portable package over the target directory, deliberately leaves the updater executable in place, and starts NovaClip again.
+`NovaClip.Windows` owns Windows-specific FFmpeg and update-process integration. `NovaClip.App` hosts WinUI 3, WebView2, the persistent profile, response observation and the update coordinator.
+
+`NovaClip.Updater` is a small self-contained process. It waits for NovaClip to exit, copies the extracted portable package over the target directory, deliberately leaves the updater executable in place, and starts NovaClip again.
 
 ## Media flow
 
