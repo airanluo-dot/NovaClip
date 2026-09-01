@@ -21,9 +21,9 @@ jobs:
       - name: Restore and build native solution
         run: |
           dotnet restore NovaClip.slnx
-          dotnet build NovaClip.slnx -c Release --no-restore -p:Platform=x64
+          dotnet build NovaClip.slnx -c Release --no-restore
       - name: Run tests
-        run: dotnet test NovaClip.slnx -c Release --no-build -p:Platform=x64 --logger "trx;LogFileName=native-rebuild.trx"
+        run: dotnet test NovaClip.slnx -c Release --no-build --logger "trx;LogFileName=native-rebuild.trx"
       - name: Enforce localization and architecture
         shell: pwsh
         run: |
