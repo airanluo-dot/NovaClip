@@ -46,8 +46,11 @@ jobs:
           if (Test-Path $log) { Remove-Item $log -Force }
           $env:NOVACLIP_CI_SMOKE = "1"
           $process = Start-Process $exe -PassThru
-          Start-Sleep -Seconds 15
-          $text = if (Test-Path $log) { Get-Content $log -Raw } else { "" }
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            Start-Sleep -Seconds 2
+            $text = if (Test-Path $log) { Get-Content $log -Raw } else { "" }
+          } while ((Get-Date) -lt $deadline -and -not $process.HasExited -and $text -notmatch "WebView2.Ready")
           Write-Host $text
           foreach ($marker in @("App.StartupCompleted", "Shell.Ready", "BrowserPage.Ready", "DownloadsPage.Ready", "HistoryPage.Ready", "SettingsPage.Ready", "WebView2.Ready")) { if ($text -notmatch [regex]::Escape($marker)) { Stop-Process $process.Id -Force -ErrorAction SilentlyContinue; throw "SMOKE_MARKER_MISSING:$marker" } }
           if ($text -match "APP_STARTUP_FAILED|XamlParseException|NAVIGATION_FAILED") { Stop-Process $process.Id -Force -ErrorAction SilentlyContinue; throw "SMOKE_STARTUP_ERROR" }
