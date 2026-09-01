@@ -21,10 +21,11 @@ public sealed partial class MainWindow : Window
         ContentFrame.Navigate(typeof(Pages.BrowserPage));
         InstallKeyboardAccelerators();
         StartupDiagnostics.Info("Shell.Ready");
-        if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") == "1")
-        {
-            foreach (var tag in new[] { "downloads", "history", "settings", "browser" }) NavigateTo(tag);
-        }
+    }
+
+    public void RunSmokeNavigation()
+    {
+        foreach (var tag in new[] { "downloads", "history", "settings", "browser" }) NavigateTo(tag);
     }
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
