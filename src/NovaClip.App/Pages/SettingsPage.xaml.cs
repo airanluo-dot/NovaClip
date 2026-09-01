@@ -1,7 +1,7 @@
 using NovaClip.Core;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Windows.Storage.Pickers;
+using global::Windows.Storage.Pickers;
 
 namespace NovaClip.App.Pages;
 
@@ -70,7 +70,7 @@ public sealed partial class SettingsPage : Page
         AppServices.Settings.Save();
     }
 
-    private async void OpenFolder_Click(object sender, RoutedEventArgs e) { if (Directory.Exists(AppServices.Settings.DownloadDirectory)) await Windows.System.Launcher.LaunchFolderPathAsync(AppServices.Settings.DownloadDirectory); }
+    private async void OpenFolder_Click(object sender, RoutedEventArgs e) { if (Directory.Exists(AppServices.Settings.DownloadDirectory)) await global::Windows.System.Launcher.LaunchFolderPathAsync(AppServices.Settings.DownloadDirectory); }
     private async void ClearLogin_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new ContentDialog { XamlRoot = XamlRoot, Title = _text.GetString("Settings_ClearLoginTitle"), Content = _text.GetString("Settings_ClearLoginMessage"), PrimaryButtonText = _text.GetString("Common_Clear"), CloseButtonText = _text.GetString("Common_Cancel"), DefaultButton = ContentDialogButton.Close };
@@ -84,7 +84,7 @@ public sealed partial class SettingsPage : Page
         var picker = new FileOpenPicker(); picker.FileTypeFilter.Add(".exe"); WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow)); var file = await picker.PickSingleFileAsync(); if (file is null) return; AppServices.Settings.FfmpegPath = file.Path; AppServices.Settings.Save(); RefreshFfmpegStatus();
     }
     private void TestFfmpeg_Click(object sender, RoutedEventArgs e) => RefreshFfmpegStatus();
-    private async void OpenLogs_Click(object sender, RoutedEventArgs e) { var folder = Path.GetDirectoryName(StartupDiagnostics.LogPath)!; await Windows.System.Launcher.LaunchFolderPathAsync(folder); }
+    private async void OpenLogs_Click(object sender, RoutedEventArgs e) { var folder = Path.GetDirectoryName(StartupDiagnostics.LogPath)!; await global::Windows.System.Launcher.LaunchFolderPathAsync(folder); }
     private void ResetDetector_Click(object sender, RoutedEventArgs e) => BrowserPage.Current?.Reload();
     private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
     {
