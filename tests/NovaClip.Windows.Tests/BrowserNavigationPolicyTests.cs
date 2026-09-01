@@ -1,5 +1,6 @@
 using NovaClip.Contracts;
 using NovaClip.Windows;
+using Xunit;
 
 namespace NovaClip.Windows.Tests;
 
