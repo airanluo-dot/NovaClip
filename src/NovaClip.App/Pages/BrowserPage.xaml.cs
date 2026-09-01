@@ -174,13 +174,13 @@ public sealed partial class BrowserPage : Page
         catch (Exception exception) { ShowError("DOWNLOAD_CREATE_FAILED", exception.Message); }
     }
 
-    private void AddressBox_KeyDown(object sender, KeyRoutedEventArgs e) { if (e.Key == Windows.System.VirtualKey.Enter && _urlResolver.TryResolve(AddressBox.Text, out var uri)) { Navigate(uri); e.Handled = true; } }
+    private void AddressBox_KeyDown(object sender, KeyRoutedEventArgs e) { if (e.Key == global::Windows.System.VirtualKey.Enter && _urlResolver.TryResolve(AddressBox.Text, out var uri)) { Navigate(uri); e.Handled = true; } }
     private void Navigate(Uri uri) => BrowserWebView.CoreWebView2?.Navigate(uri.ToString());
     private void BackButton_Click(object sender, RoutedEventArgs e) => GoBack();
     private void ForwardButton_Click(object sender, RoutedEventArgs e) => GoForward();
     private void RefreshButton_Click(object sender, RoutedEventArgs e) => Reload();
     private void HomeButton_Click(object sender, RoutedEventArgs e) => Navigate(_home.HomeUri);
-    private async void InfoActionButton_Click(object sender, RoutedEventArgs e) { if (_pendingExternalUri is not null) await Windows.System.Launcher.LaunchUriAsync(_pendingExternalUri); }
+    private async void InfoActionButton_Click(object sender, RoutedEventArgs e) { if (_pendingExternalUri is not null) await global::Windows.System.Launcher.LaunchUriAsync(_pendingExternalUri); }
 
     private void SetLoading(bool value) { _isLoading = value; RefreshButton.Content = new SymbolIcon(value ? Symbol.Cancel : Symbol.Refresh); }
     private void SetDetectionState(MediaDetectionState state)
