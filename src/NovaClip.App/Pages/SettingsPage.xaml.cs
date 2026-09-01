@@ -1,3 +1,4 @@
+using System.Globalization;
 using NovaClip.Core;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -20,7 +21,7 @@ public sealed partial class SettingsPage : Page
     {
         var settings = AppServices.Settings;
         DownloadDirectoryText.Text = settings.DownloadDirectory;
-        ConcurrencyButtons.SelectedItem = FindByTag(ConcurrencyButtons.Items, settings.MaxConcurrentTasks.ToString());
+        ConcurrencyButtons.SelectedItem = FindByTag(ConcurrencyButtons.Items, settings.MaxConcurrentTasks.ToString(CultureInfo.InvariantCulture));
         QualityBox.SelectedItem = FindByTag(QualityBox.Items, settings.DefaultQuality);
         CodecBox.SelectedItem = FindByTag(CodecBox.Items, settings.DefaultCodec);
         RetryBox.SelectedItem = FindByTag(RetryBox.Items, settings.RetryPreset);
