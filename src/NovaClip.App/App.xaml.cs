@@ -1,6 +1,4 @@
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using WinRT;
 
 namespace NovaClip.App;
 
@@ -32,17 +30,5 @@ public partial class App : Application
             StartupDiagnostics.Error("APP_STARTUP_FAILED", exception);
             throw;
         }
-    }
-
-    [STAThread]
-    public static void Main()
-    {
-        ComWrappersSupport.InitializeComWrappers();
-        Application.Start(_ =>
-        {
-            SynchronizationContext.SetSynchronizationContext(new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread()));
-            var app = new App();
-            GC.KeepAlive(app);
-        });
     }
 }
