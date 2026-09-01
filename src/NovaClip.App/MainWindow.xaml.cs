@@ -16,7 +16,6 @@ public sealed partial class MainWindow : Window
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        RootNavigationView.SettingsInvoked += (_, _) => NavigateTo("settings");
         RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
         ContentFrame.Navigate(typeof(Pages.BrowserPage));
         InstallKeyboardAccelerators();
@@ -50,7 +49,7 @@ public sealed partial class MainWindow : Window
 
     private void InstallKeyboardAccelerators()
     {
-        AddAccelerator(VirtualKeyModifiers.Control, VirtualKey.OemComma, () => NavigateTo("settings"));
+        AddAccelerator(VirtualKeyModifiers.Control, (VirtualKey)188, () => NavigateTo("settings"));
         AddAccelerator(VirtualKeyModifiers.Control, VirtualKey.L, () => Pages.BrowserPage.Current?.FocusAddressBar());
         AddAccelerator(VirtualKeyModifiers.Control, VirtualKey.R, () => Pages.BrowserPage.Current?.Reload());
         AddAccelerator(VirtualKeyModifiers.Menu, VirtualKey.Left, () => Pages.BrowserPage.Current?.GoBack());
