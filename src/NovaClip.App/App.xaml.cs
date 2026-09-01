@@ -22,6 +22,7 @@ public partial class App : Application
             StartupDiagnostics.Info("Services.Ready");
             MainWindow = new MainWindow();
             MainWindow.Activate();
+            if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") == "1") MainWindow.RunSmokeNavigation();
             StartupDiagnostics.Info("App.StartupCompleted");
             _ = AppServices.UpdateCoordinator.CheckSilentlyAsync();
         }
