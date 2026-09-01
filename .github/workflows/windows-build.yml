@@ -62,7 +62,7 @@ jobs:
         run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DPublishDir=${{ github.workspace }}\publish\win-x64" "/DOutputDir=${{ github.workspace }}\artifacts\windows" installer\NovaClip.iss'
       - name: Hash deliverables
         shell: pwsh
-        run: Get-FileHash artifacts/windows/* -Algorithm SHA256 | Format-Table
+        run: Get-ChildItem artifacts/windows -File | Get-FileHash -Algorithm SHA256 | Format-Table
       - uses: actions/upload-artifact@v4
         with:
           name: NovaClip-1.0.0-beta.4-win-x64-${{ github.sha }}
