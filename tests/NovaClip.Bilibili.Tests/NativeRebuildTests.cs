@@ -1,4 +1,5 @@
 using NovaClip.Contracts;
+using Xunit;
 
 namespace NovaClip.Bilibili.Tests;
 
