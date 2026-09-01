@@ -9,7 +9,7 @@ public sealed class NativeRebuildTests
     [InlineData("BV1ab411c7mD", "https://www.bilibili.com/video/BV1ab411c7mD")]
     [InlineData("av170001", "https://www.bilibili.com/video/av170001")]
     [InlineData("ep123", "https://www.bilibili.com/bangumi/play/ep123")]
-    public void Resolves_friendly_input(string input, string expected)
+    public void ResolvesFriendlyInput(string input, string expected)
     {
         var resolver = new BilibiliUrlResolver();
         Assert.True(resolver.TryResolve(input, out var uri));
@@ -17,7 +17,7 @@ public sealed class NativeRebuildTests
     }
 
     [Fact]
-    public async Task Ignores_results_from_old_navigation_generation()
+    public async Task IgnoresResultsFromOldNavigationGeneration()
     {
         var strategy = new BlockingStrategy();
         var coordinator = new MediaDetectionCoordinator([strategy]);
