@@ -22,7 +22,7 @@ public sealed partial class BrowserPage : Page
     private List<MediaTrack> _videoTracks = [];
     private Uri? _pendingExternalUri;
     private long _navigationGeneration;
-    private bool _initialized;
+    private readonly Task _initializationTask;
     private bool _isLoading;
 
     public static BrowserPage? Current { get; private set; }
@@ -32,6 +32,9 @@ public sealed partial class BrowserPage : Page
         InitializeComponent();
         Loaded += BrowserPage_Loaded;
         Unloaded += (_, _) => { if (ReferenceEquals(Current, this)) Current = null; };
+        Current = this;
+        StartupDiagnostics.Info("BrowserPage.InitializeRequested");
+        _initializationTask = InitializeWebViewAsync();
     }
 
     public void FocusAddressBar() { AddressBox.Focus(FocusState.Keyboard); AddressBox.SelectAll(); }
@@ -42,9 +45,8 @@ public sealed partial class BrowserPage : Page
     private async void BrowserPage_Loaded(object sender, RoutedEventArgs e)
     {
         Current = this;
-        if (_initialized) return;
-        _initialized = true;
-        await InitializeWebViewAsync();
+        StartupDiagnostics.Info("BrowserPage.Loaded");
+        await _initializationTask;
     }
 
     private async Task InitializeWebViewAsync()
@@ -55,6 +57,8 @@ public sealed partial class BrowserPage : Page
             var profilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NovaClip", "WebView2");
             Directory.CreateDirectory(profilePath);
             var environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, profilePath, null);
+            StartupDiagnostics.Info("WebView2.EnvironmentReady");
+            StartupDiagnostics.Info("WebView2.ControlInitializing");
             await BrowserWebView.EnsureCoreWebView2Async(environment);
             var core = BrowserWebView.CoreWebView2;
             core.NewWindowRequested += Core_NewWindowRequested;
