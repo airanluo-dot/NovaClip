@@ -2,6 +2,8 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using VirtualKey = global::Windows.System.VirtualKey;
+using VirtualKeyModifiers = global::Windows.System.VirtualKeyModifiers;
 
 namespace NovaClip.App;
 
@@ -48,14 +50,14 @@ public sealed partial class MainWindow : Window
 
     private void InstallKeyboardAccelerators()
     {
-        AddAccelerator(VirtualKeyModifiers.Control, Windows.System.VirtualKey.OemComma, () => NavigateTo("settings"));
-        AddAccelerator(VirtualKeyModifiers.Control, Windows.System.VirtualKey.L, () => Pages.BrowserPage.Current?.FocusAddressBar());
-        AddAccelerator(VirtualKeyModifiers.Control, Windows.System.VirtualKey.R, () => Pages.BrowserPage.Current?.Reload());
-        AddAccelerator(VirtualKeyModifiers.Menu, Windows.System.VirtualKey.Left, () => Pages.BrowserPage.Current?.GoBack());
-        AddAccelerator(VirtualKeyModifiers.Menu, Windows.System.VirtualKey.Right, () => Pages.BrowserPage.Current?.GoForward());
+        AddAccelerator(VirtualKeyModifiers.Control, VirtualKey.OemComma, () => NavigateTo("settings"));
+        AddAccelerator(VirtualKeyModifiers.Control, VirtualKey.L, () => Pages.BrowserPage.Current?.FocusAddressBar());
+        AddAccelerator(VirtualKeyModifiers.Control, VirtualKey.R, () => Pages.BrowserPage.Current?.Reload());
+        AddAccelerator(VirtualKeyModifiers.Menu, VirtualKey.Left, () => Pages.BrowserPage.Current?.GoBack());
+        AddAccelerator(VirtualKeyModifiers.Menu, VirtualKey.Right, () => Pages.BrowserPage.Current?.GoForward());
     }
 
-    private void AddAccelerator(VirtualKeyModifiers modifiers, Windows.System.VirtualKey key, Action action)
+    private void AddAccelerator(VirtualKeyModifiers modifiers, VirtualKey key, Action action)
     {
         var accelerator = new KeyboardAccelerator { Modifiers = modifiers, Key = key };
         accelerator.Invoked += (_, args) => { action(); args.Handled = true; };
