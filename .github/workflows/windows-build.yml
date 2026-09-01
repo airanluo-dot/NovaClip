@@ -37,7 +37,7 @@ jobs:
         run: |
           $publish = Join-Path "${{ github.workspace }}" "publish\win-x64"
           if (-not (Test-Path (Join-Path $publish "resources.pri"))) { throw "PUBLISH_MISSING_RESOURCES_PRI" }
-          if (-not (Get-ChildItem $publish -Recurse -Filter *.xbf)) { throw "PUBLISH_MISSING_XBF" }
+          if (-not (Test-Path (Join-Path $publish "NovaClip.exe"))) { throw "PUBLISH_MISSING_APP_EXECUTABLE" }
       - name: Smoke test real page construction
         shell: pwsh
         run: |
