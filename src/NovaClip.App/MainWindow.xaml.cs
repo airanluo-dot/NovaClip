@@ -13,6 +13,7 @@ public sealed partial class MainWindow : Window
     {
         StartupDiagnostics.Info("MainWindow.Created");
         InitializeComponent();
+        Title = new LocalizationService().GetString("MainWindow_Title");
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
