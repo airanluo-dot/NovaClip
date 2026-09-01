@@ -58,8 +58,10 @@ public sealed partial class BrowserPage : Page
             Directory.CreateDirectory(profilePath);
             var environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, profilePath, null);
             StartupDiagnostics.Info("WebView2.EnvironmentReady");
+            StartupDiagnostics.Info("WebView2.Ready");
             StartupDiagnostics.Info("WebView2.ControlInitializing");
             await BrowserWebView.EnsureCoreWebView2Async(environment);
+            StartupDiagnostics.Info("WebView2.ControlReady");
             var core = BrowserWebView.CoreWebView2;
             core.NewWindowRequested += Core_NewWindowRequested;
             core.NavigationStarting += Core_NavigationStarting;
@@ -73,7 +75,6 @@ public sealed partial class BrowserPage : Page
             var bridgePath = Path.Combine(AppContext.BaseDirectory, "assets", "js", "bilibili-bridge.js");
             if (File.Exists(bridgePath)) await core.AddScriptToExecuteOnDocumentCreatedAsync(await File.ReadAllTextAsync(bridgePath));
             Navigate(_home.HomeUri);
-            StartupDiagnostics.Info("WebView2.Ready");
             StartupDiagnostics.Info("BrowserPage.Ready");
         }
         catch (Exception exception)
