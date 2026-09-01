@@ -2,7 +2,7 @@
 
 NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 WinUI 3 + WebView2 打开 B 站真实页面，使用原生 C# 下载引擎将 DASH 音视频流式写入磁盘，并调用本机 FFmpeg 进行无损 remux。
 
-当前版本：**1.0.0-beta.2**
+当前版本：**1.0.0-beta.4 — Native Windows Rebuild**
 
 > 当前仓库用于首个测试版开发。应用只处理用户在 B 站账号下有权正常播放的内容，不实现 DRM 解密、会员权限绕过、Cookie 窃取或访问控制规避。
 
@@ -24,7 +24,7 @@ NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 
 
 ## 使用方式
 
-1. 从 GitHub Actions artifact 或 Releases 下载 `NovaClip-win-x64` 安装版/便携版。
+1. 从 GitHub Releases 下载 `NovaClip-1.0.0-beta.4-win-x64-setup.exe` 安装版或 `NovaClip-win-x64-portable.zip` 便携版。
 2. 启动 NovaClip，在浏览器页登录 B 站。
 3. 打开可正常播放的 BV、AV 或番剧页面。
 4. 等待“当前媒体”卡片出现轨道，选择清晰度并点击“添加到下载”。
@@ -37,7 +37,7 @@ NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 
 - 通过安装器安装时：下载 `*-setup.exe`，退出应用后使用同一个安装目录覆盖更新。
 - 直接运行便携版时：便携包包含 `portable.marker` 和独立更新器，下载 `*-portable.zip` 后在应用退出时替换文件并自动重启。
 
-当前仓库为私有仓库。开发者测试自动更新时可通过进程环境变量 `NOVACLIP_GITHUB_TOKEN` 提供只读 GitHub 访问令牌；令牌不会写入 NovaClip 设置。公开分发仍应改用公开、签名的更新源。Release 资产若提供 GitHub `digest`，下载后会先校验 SHA-256 再执行。
+当前仓库与 Release 均公开，普通更新检查不需要 GitHub 令牌。Release 资产若提供 GitHub `digest`，下载后会先校验 SHA-256 再执行。
 
 ## 隐私与安全
 
@@ -51,11 +51,11 @@ NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 
 ```text
 WinUI 3 / WebView2
         ↓ versioned JSON bridge + PlayURL response observer
-BiliNative.WebBridge
+NovaClip.Bilibili
         ↓ normalized MediaDescriptor
-BiliNative.Core
+NovaClip.Core
         ↓
-BiliNative.Infrastructure (HTTP Range / retry / SQLite / update API)
+NovaClip.Infrastructure (HTTP Range / retry / SQLite / update API)
         ↓
 Windows FFmpeg process + Windows updater
 ```
@@ -63,9 +63,9 @@ Windows FFmpeg process + Windows updater
 ## 开发
 
 ```powershell
-dotnet restore BiliNative.sln
-dotnet test BiliNative.sln -c Release
-dotnet build BiliNative.sln -c Release
+dotnet restore NovaClip.slnx
+dotnet test NovaClip.slnx -c Release
+dotnet build NovaClip.slnx -c Release
 ```
 
 云端 macOS 环境可以编写和测试 Core、Infrastructure、WebBridge；WinUI 3、WebView2、FFmpeg 进程和安装器通过 GitHub Actions Windows Runner 构建与验证。Windows 工作流见 [.github/workflows/windows-build.yml](.github/workflows/windows-build.yml)。
