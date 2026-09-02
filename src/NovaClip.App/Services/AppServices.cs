@@ -5,7 +5,7 @@ namespace NovaClip.App;
 
 public static class AppServices
 {
-    public const string CurrentVersion = "1.0.0-beta.4";
+    public const string CurrentVersion = "1.0.0-beta.5";
 
     public static WindowsSettingsStore Settings { get; } = new();
     public static SqliteDownloadTaskRepository Repository { get; } = new(ResolveDatabasePath());

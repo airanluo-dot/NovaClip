@@ -14,13 +14,27 @@ public sealed partial class MainWindow : Window
         StartupDiagnostics.Info("MainWindow.Created");
         InitializeComponent();
         Title = new LocalizationService().GetString("MainWindow_Title");
-        SystemBackdrop = new MicaBackdrop();
+        TryConfigureBackdrop();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+        NavigateTo("browser");
         RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
-        ContentFrame.Navigate(typeof(Pages.BrowserPage));
         InstallKeyboardAccelerators();
+        Closed += (_, _) => StartupDiagnostics.Info("MainWindow.Closed");
         StartupDiagnostics.Info("Shell.Ready");
+    }
+
+    private void TryConfigureBackdrop()
+    {
+        try
+        {
+            SystemBackdrop = new MicaBackdrop();
+            StartupDiagnostics.Info("Shell.BackdropReady");
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Warning("Shell backdrop unavailable; using the default background.", exception);
+        }
     }
 
     public void RunSmokeNavigation()

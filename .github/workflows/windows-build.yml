@@ -3,7 +3,7 @@ name: Windows native build and acceptance
 on:
   push:
     branches: [main, refactor/beta.4-native-rebuild]
-    tags: ["v1.0.0-beta.4"]
+    tags: ["v1.0.0-beta.5"]
   pull_request:
   workflow_dispatch:
 
@@ -47,12 +47,15 @@ jobs:
           $env:NOVACLIP_CI_SMOKE = "1"
           $process = Start-Process $exe -PassThru
           $deadline = (Get-Date).AddSeconds(60)
+          $markers = @("App.StartupCompleted", "Shell.Ready", "BrowserPage.Ready", "DownloadsPage.Ready", "HistoryPage.Ready", "SettingsPage.Ready", "WebView2.Ready")
           do {
             Start-Sleep -Seconds 2
             $text = if (Test-Path $log) { Get-Content $log -Raw } else { "" }
-          } while ((Get-Date) -lt $deadline -and $text -notmatch "WebView2.Ready")
+            $ready = $true
+            foreach ($marker in $markers) { if ($text -notmatch [regex]::Escape($marker)) { $ready = $false; break } }
+          } while ((Get-Date) -lt $deadline -and -not $ready -and -not $process.HasExited)
           Write-Host $text
-          foreach ($marker in @("App.StartupCompleted", "Shell.Ready", "BrowserPage.Ready", "DownloadsPage.Ready", "HistoryPage.Ready", "SettingsPage.Ready", "WebView2.Ready")) { if ($text -notmatch [regex]::Escape($marker)) { Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force; throw "SMOKE_MARKER_MISSING:$marker" } }
+          foreach ($marker in $markers) { if ($text -notmatch [regex]::Escape($marker)) { Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force; throw "SMOKE_MARKER_MISSING:$marker" } }
           if ($text -match "APP_STARTUP_FAILED|XamlParseException|NAVIGATION_FAILED") { Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force; throw "SMOKE_STARTUP_ERROR" }
           Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force
       - name: Install Inno Setup
@@ -65,24 +68,24 @@ jobs:
         run: Get-ChildItem artifacts/windows -File | Get-FileHash -Algorithm SHA256 | Format-Table
       - uses: actions/upload-artifact@v4
         with:
-          name: NovaClip-1.0.0-beta.4-win-x64-${{ github.sha }}
+          name: NovaClip-1.0.0-beta.5-win-x64-${{ github.sha }}
           path: |
             artifacts/windows/NovaClip-win-x64-portable.zip
-            artifacts/windows/NovaClip-1.0.0-beta.4-win-x64-setup.exe
+            artifacts/windows/NovaClip-1.0.0-beta.5-win-x64-setup.exe
           if-no-files-found: error
 
   release:
-    if: github.ref == 'refs/tags/v1.0.0-beta.4'
+    if: github.ref == 'refs/tags/v1.0.0-beta.5'
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: NovaClip-1.0.0-beta.4-win-x64-${{ github.sha }}
+          name: NovaClip-1.0.0-beta.5-win-x64-${{ github.sha }}
           path: release-assets
       - uses: softprops/action-gh-release@v2
         with:
           prerelease: true
-          name: NovaClip 1.0.0-beta.4 — Native Windows Rebuild
+          name: NovaClip 1.0.0-beta.5 — Startup Reliability Fix
           generate_release_notes: true
           files: release-assets/*

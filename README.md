@@ -2,7 +2,7 @@
 
 NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 WinUI 3 + WebView2 打开 B 站真实页面，使用原生 C# 下载引擎将 DASH 音视频流式写入磁盘，并调用本机 FFmpeg 进行无损 remux。
 
-当前版本：**1.0.0-beta.4 — Native Windows Rebuild**
+当前版本：**1.0.0-beta.5 — Startup Reliability Fix**
 
 > 当前仓库用于首个测试版开发。应用只处理用户在 B 站账号下有权正常播放的内容，不实现 DRM 解密、会员权限绕过、Cookie 窃取或访问控制规避。
 
@@ -24,7 +24,7 @@ NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 
 
 ## 使用方式
 
-1. 从 GitHub Releases 下载 `NovaClip-1.0.0-beta.4-win-x64-setup.exe` 安装版或 `NovaClip-win-x64-portable.zip` 便携版。
+1. 从 GitHub Releases 下载 `NovaClip-1.0.0-beta.5-win-x64-setup.exe` 安装版或 `NovaClip-win-x64-portable.zip` 便携版。
 2. 启动 NovaClip，在浏览器页登录 B 站。
 3. 打开可正常播放的 BV、AV 或番剧页面。
 4. 等待“当前媒体”卡片出现轨道，选择清晰度并点击“添加到下载”。
