@@ -8,7 +8,7 @@ namespace NovaClip.App.Pages;
 public sealed partial class DownloadsPage : Page
 {
     private readonly ObservableCollection<DownloadRow> _rows = [];
-    private readonly LocalizationService _text = new();
+    private static readonly LocalizationService Text = new();
 
     public DownloadsPage()
     {
@@ -31,21 +31,41 @@ public sealed partial class DownloadsPage : Page
 
     private async void PauseResumeButton_Click(object sender, RoutedEventArgs e)
     {
-        if (TaskList.SelectedItem is not DownloadRow row) return;
-        if (row.State is DownloadTaskState.Paused or DownloadTaskState.Failed) await AppServices.Downloads.ResumeAsync(row.Id);
-        else if (row.State is not (DownloadTaskState.Completed or DownloadTaskState.Cancelled)) await AppServices.Downloads.PauseAsync(row.Id);
-        StatusBar.Message = _text.GetString("Task_StateUpdated");
-        StatusBar.Severity = InfoBarSeverity.Success;
-        StatusBar.IsOpen = true;
+        if ((sender as FrameworkElement)?.DataContext is not DownloadRow row) return;
+        try
+        {
+            if (row.State is DownloadTaskState.Paused or DownloadTaskState.Failed) await AppServices.Downloads.ResumeAsync(row.Id);
+            else if (row.State is not (DownloadTaskState.Completed or DownloadTaskState.Cancelled)) await AppServices.Downloads.PauseAsync(row.Id);
+            StatusBar.Message = Text.GetString("Task_StateUpdated");
+            StatusBar.Severity = InfoBarSeverity.Success;
+            StatusBar.IsOpen = true;
+        }
+        catch (Exception exception)
+        {
+            StatusBar.Message = Text.Format("Error_WithCode", "TASK_ACTION_FAILED");
+            StatusBar.Severity = InfoBarSeverity.Error;
+            StatusBar.IsOpen = true;
+            StartupDiagnostics.Warning("Download task action failed.", exception);
+        }
     }
 
     private async void CancelButton_Click(object sender, RoutedEventArgs e)
     {
-        if (TaskList.SelectedItem is not DownloadRow row) return;
-        await AppServices.Downloads.CancelAsync(row.Id);
-        StatusBar.Message = _text.GetString("Task_CancelRequested");
-        StatusBar.Severity = InfoBarSeverity.Informational;
-        StatusBar.IsOpen = true;
+        if ((sender as FrameworkElement)?.DataContext is not DownloadRow row) return;
+        try
+        {
+            await AppServices.Downloads.CancelAsync(row.Id);
+            StatusBar.Message = Text.GetString("Task_CancelRequested");
+            StatusBar.Severity = InfoBarSeverity.Informational;
+            StatusBar.IsOpen = true;
+        }
+        catch (Exception exception)
+        {
+            StatusBar.Message = Text.Format("Error_WithCode", "TASK_CANCEL_FAILED");
+            StatusBar.Severity = InfoBarSeverity.Error;
+            StatusBar.IsOpen = true;
+            StartupDiagnostics.Warning("Download cancellation failed.", exception);
+        }
     }
 
     public sealed record DownloadRow(DownloadTaskSnapshot Snapshot)
@@ -54,6 +74,14 @@ public sealed partial class DownloadsPage : Page
         public string Title => Snapshot.Title;
         public string OutputPath => Snapshot.OutputPath;
         public DownloadTaskState State => Snapshot.State;
+        public string StateText
+        {
+            get
+            {
+                var localized = Text.GetString($"DownloadState_{State}");
+                return string.IsNullOrWhiteSpace(localized) ? State.ToString() : localized;
+            }
+        }
         public string? ErrorMessage => Snapshot.ErrorMessage;
         public double ProgressFraction => Snapshot.TotalBytes is > 0 ? Math.Clamp((double)Snapshot.DownloadedBytes / Snapshot.TotalBytes.Value, 0, 1) : 0;
     }

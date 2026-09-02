@@ -14,7 +14,15 @@ public sealed partial class HistoryPage : Page
 
     private async void HistoryPage_Loaded(object sender, RoutedEventArgs e)
     {
-        var history = await ((IHistoryRepository)AppServices.Repository).GetAllAsync();
-        HistoryList.ItemsSource = history;
+        try
+        {
+            var history = await ((IHistoryRepository)AppServices.Repository).GetAllAsync();
+            HistoryList.ItemsSource = history;
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Warning("History could not be loaded.", exception);
+            HistoryList.ItemsSource = Array.Empty<DownloadTaskSnapshot>();
+        }
     }
 }
