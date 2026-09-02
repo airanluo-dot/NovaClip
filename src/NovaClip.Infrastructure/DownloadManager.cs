@@ -53,7 +53,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
         Publish(snapshot);
         long runId;
         lock (work.Gate) runId = ++work.RunId;
-        _ = RunAsync(work, cancellationToken, runId);
+        _ = RunAsync(work, runId, cancellationToken);
         return Task.FromResult(request.TaskId);
     }
 
@@ -90,7 +90,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
                 Publish(work.Snapshot);
                 runId = ++work.RunId;
             }
-            _ = RunAsync(work, cancellationToken, runId);
+            _ = RunAsync(work, runId, cancellationToken);
         }
         return Task.CompletedTask;
     }
@@ -145,7 +145,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
                 {
                     long runId;
                     lock (work.Gate) runId = ++work.RunId;
-                    _ = RunAsync(work, CancellationToken.None, runId);
+                    _ = RunAsync(work, runId, CancellationToken.None);
                 }
             }
         }
@@ -160,7 +160,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
         _slots.Dispose();
     }
 
-    private async Task RunAsync(DownloadWork work, CancellationToken externalCancellationToken, long runId)
+    private async Task RunAsync(DownloadWork work, long runId, CancellationToken externalCancellationToken)
     {
         CancellationToken stopToken;
         lock (work.Gate)
