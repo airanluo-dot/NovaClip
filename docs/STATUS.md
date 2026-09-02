@@ -1,4 +1,4 @@
-# Status — 1.0.0-beta.5 Startup Reliability Fix
+# Status — 1.0.0-beta.6 Stability and Safety Fixes
 
 Development branch: `refactor/beta.4-native-rebuild`.
 
@@ -14,4 +14,4 @@ Development branch: `refactor/beta.4-native-rebuild`.
 
 ## Release gate
 
-GitHub Actions must compile and test the solution, verify localization and dependency rules, publish `resources.pri` and XBF resources, launch the packaged executable, construct every top-level page, and observe `App.StartupCompleted` plus every `Page.Ready` marker. A beta.5 tag is not created until those checks are green.
+GitHub Actions must compile and test the solution, verify localization and dependency rules, publish `resources.pri` and XBF resources, launch the packaged executable, construct every top-level page, and observe `App.StartupCompleted` plus every `Page.Ready` marker. A beta.6 tag is not created until those checks are green.

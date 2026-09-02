@@ -1,6 +1,6 @@
 # Update design
 
-NovaClip 1.0.0-beta.5 supports installed and portable coverage updates.
+NovaClip 1.0.0-beta.6 supports installed and portable coverage updates.
 
 ## Installed build
 
