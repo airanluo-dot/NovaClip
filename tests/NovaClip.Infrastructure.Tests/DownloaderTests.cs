@@ -85,6 +85,27 @@ public sealed class DownloaderTests
         }
     }
 
+    [Fact]
+    public async Task RejectsWrongPartialRangeWithoutOverwritingExistingBytes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "NovaClipTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var path = Path.Combine(root, "video.part");
+            await File.WriteAllBytesAsync(path, [1, 2]);
+            var downloader = new HttpRangeDownloader(new HttpClient(new WrongRangeHandler()));
+            var track = new MediaTrack { Type = TrackType.Video, TrackId = "video", Urls = [new MediaUrlCandidate("https://cdn.example/video.m4s")], Size = 4 };
+
+            await Assert.ThrowsAsync<HttpRequestException>(() => downloader.DownloadTrackAsync(track, path, new RetryPolicy(1), null, null, CancellationToken.None));
+            Assert.Equal(new byte[] { 1, 2 }, await File.ReadAllBytesAsync(path));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     private sealed class StaticHandler(byte[] bytes, bool supportsRange) : HttpMessageHandler
     {
         public long? LastRangeStart { get; private set; }
@@ -122,6 +143,17 @@ public sealed class DownloaderTests
         {
             var bytes = request.RequestUri!.AbsolutePath.EndsWith("segment-0", StringComparison.Ordinal) ? new byte[] { 1, 2 } : new byte[] { 3, 4 };
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) });
+        }
+    }
+
+    private sealed class WrongRangeHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.PartialContent) { Content = new ByteArrayContent([1, 2, 3, 4]) };
+            response.Content.Headers.ContentRange = new ContentRangeHeaderValue(0, 3, 4);
+            response.Content.Headers.ContentLength = 4;
+            return Task.FromResult(response);
         }
     }
 }
