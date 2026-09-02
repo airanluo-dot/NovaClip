@@ -24,6 +24,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
 
     public async Task DownloadAsync(DownloadRequest request, IProgress<DownloadProgress> progress, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(progress);
+        ValidateRequest(request);
         Directory.CreateDirectory(request.OutputDirectory);
         var taskRoot = Path.Combine(request.OutputDirectory, ".bilinative", request.TaskId.ToString("N"));
         Directory.CreateDirectory(taskRoot);
@@ -39,7 +41,19 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         }
         if (tracks.Count == 0) throw new InvalidOperationException("The download request has no media tracks.");
 
-        var totals = tracks.Sum(track => track.Track.Size ?? 0);
+        long totals = 0;
+        var totalsOverflowed = false;
+        foreach (var track in tracks)
+        {
+            var size = track.Track.Size ?? 0;
+            if (size > 0 && long.MaxValue - totals >= size) totals += size;
+            else if (size > 0)
+            {
+                totalsOverflowed = true;
+                break;
+            }
+        }
+        if (totalsOverflowed) totals = 0;
         var gate = new object();
         var downloadedByTrack = new Dictionary<string, long>(StringComparer.Ordinal);
         var trackTasks = tracks.Select(async item =>
@@ -68,7 +82,13 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         CancellationToken cancellationToken)
     {
         var completed = 0L;
-        var total = request.Media.LegacySegments.Sum(segment => segment.Size ?? 0);
+        long total = 0;
+        foreach (var segment in request.Media.LegacySegments)
+        {
+            var size = segment.Size ?? 0;
+            if (size > 0 && long.MaxValue - total >= size) total += size;
+            else if (size > 0) { total = 0; break; }
+        }
         for (var index = 0; index < request.Media.LegacySegments.Count; index++)
         {
             var segment = request.Media.LegacySegments[index];
@@ -155,7 +175,10 @@ public sealed class HttpRangeDownloader : IDownloadEngine
                 }).ToArray()
         };
         var json = JsonSerializer.Serialize(manifest, ManifestJsonOptions);
-        await File.WriteAllTextAsync(Path.Combine(taskRoot, "task.json"), json, cancellationToken).ConfigureAwait(false);
+        var manifestPath = Path.Combine(taskRoot, "task.json");
+        var temporaryPath = manifestPath + ".tmp";
+        await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
+        File.Move(temporaryPath, manifestPath, true);
     }
 
     public async Task<long> DownloadTrackAsync(
@@ -166,7 +189,11 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         MediaRequestHeaders? requestHeaders,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(track);
+        ArgumentNullException.ThrowIfNull(track.Urls);
         if (track.Urls.Count == 0) throw new InvalidOperationException("The media track has no URL candidates.");
+        if (string.IsNullOrWhiteSpace(destinationPath) || !Path.IsPathRooted(destinationPath)) throw new ArgumentException("The destination path must be absolute.", nameof(destinationPath));
+        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? throw new ArgumentException("The destination path must include a directory.", nameof(destinationPath)));
         if (track.Size is long expectedSize && File.Exists(destinationPath))
         {
             var existingLength = new FileInfo(destinationPath).Length;
@@ -181,10 +208,15 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         for (var candidateIndex = 0; candidateIndex < track.Urls.Count; candidateIndex++)
         {
             var candidate = track.Urls[candidateIndex];
+            if (candidate is null || !Uri.TryCreate(candidate.Url, UriKind.Absolute, out var candidateUri) || candidateUri.Scheme is not ("http" or "https") || string.IsNullOrWhiteSpace(candidateUri.Host) || !string.IsNullOrEmpty(candidateUri.UserInfo))
+            {
+                last = new UriFormatException("The media URL candidate is not an HTTP(S) URI.");
+                continue;
+            }
             try
             {
                 return await _retryExecutor.ExecuteAsync(
-                    token => DownloadCandidateAsync(track, candidate.Url, destinationPath, progress, requestHeaders, token),
+                    token => DownloadCandidateAsync(track, candidateUri, destinationPath, progress, requestHeaders, token),
                     retryPolicy,
                     IsTransient,
                     cancellationToken).ConfigureAwait(false);
@@ -200,7 +232,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
 
     private async Task<long> DownloadCandidateAsync(
         MediaTrack track,
-        string url,
+        Uri url,
         string destinationPath,
         IProgress<TrackProgress>? progress,
         MediaRequestHeaders? requestHeaders,
@@ -217,11 +249,11 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             throw new HttpRequestException($"HTTP {(int)response.StatusCode} while downloading media.", null, response.StatusCode);
         }
 
-        var append = existingLength > 0 && response.StatusCode == HttpStatusCode.PartialContent;
-        if (append && response.Content.Headers.ContentRange?.From != existingLength)
+        if (existingLength > 0 && response.StatusCode == HttpStatusCode.PartialContent && response.Content.Headers.ContentRange?.From != existingLength)
         {
-            append = false;
+            throw new HttpRequestException("The server returned a partial response for the wrong byte range.", null, HttpStatusCode.PreconditionFailed);
         }
+        var append = existingLength > 0 && response.StatusCode == HttpStatusCode.PartialContent;
 
         var startingLength = append ? existingLength : 0L;
         var totalLength = GetTotalLength(response, startingLength);
@@ -235,6 +267,10 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         {
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             downloaded += read;
+            if (track.Size is > 0 && downloaded > track.Size.Value)
+            {
+                throw new InvalidDataException("The server returned more bytes than the media track declares.");
+            }
             var speed = stopwatch.Elapsed.TotalSeconds > 0 ? (downloaded - startingLength) / stopwatch.Elapsed.TotalSeconds : 0;
             progress?.Report(new TrackProgress(track.Type, downloaded, totalLength, speed));
         }
@@ -244,6 +280,10 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         {
             throw new IOException($"Expected {totalLength} bytes but received {downloaded}.");
         }
+        if (track.Size is > 0 && downloaded != track.Size.Value)
+        {
+            throw new IOException($"Expected {track.Size.Value} media bytes but received {downloaded}.");
+        }
 
         return downloaded;
     }
@@ -252,13 +292,13 @@ public sealed class HttpRangeDownloader : IDownloadEngine
     {
         request.Headers.Accept.TryParseAdd("*/*");
         if (headers is null) return;
-        if (!string.IsNullOrWhiteSpace(headers.Referer) && Uri.TryCreate(headers.Referer, UriKind.Absolute, out var referer))
+        if (!string.IsNullOrWhiteSpace(headers.Referer) && Uri.TryCreate(headers.Referer, UriKind.Absolute, out var referer) && referer.Scheme is ("http" or "https") && !string.IsNullOrEmpty(referer.Host) && string.IsNullOrEmpty(referer.UserInfo))
         {
             request.Headers.Referrer = referer;
         }
-        if (!string.IsNullOrWhiteSpace(headers.Origin)) request.Headers.TryAddWithoutValidation("Origin", headers.Origin);
-        if (!string.IsNullOrWhiteSpace(headers.UserAgent)) request.Headers.UserAgent.TryParseAdd(headers.UserAgent);
-        if (!string.IsNullOrWhiteSpace(headers.Cookie)) request.Headers.TryAddWithoutValidation("Cookie", headers.Cookie);
+        if (!string.IsNullOrWhiteSpace(headers.Origin) && headers.Origin.Length <= 4_096 && !ContainsHeaderInjection(headers.Origin) && Uri.TryCreate(headers.Origin, UriKind.Absolute, out var origin) && origin.Scheme is ("http" or "https") && !string.IsNullOrEmpty(origin.Host) && string.IsNullOrEmpty(origin.UserInfo)) request.Headers.TryAddWithoutValidation("Origin", headers.Origin);
+        if (!string.IsNullOrWhiteSpace(headers.UserAgent) && headers.UserAgent.Length <= 4_096 && !ContainsHeaderInjection(headers.UserAgent)) request.Headers.UserAgent.TryParseAdd(headers.UserAgent);
+        if (!string.IsNullOrWhiteSpace(headers.Cookie) && headers.Cookie.Length <= 64_000 && !ContainsHeaderInjection(headers.Cookie) && request.RequestUri is { } uri && IsTrustedMediaHost(uri.Host)) request.Headers.TryAddWithoutValidation("Cookie", headers.Cookie);
     }
 
     private static long? GetTotalLength(HttpResponseMessage response, long startingLength)
@@ -271,16 +311,57 @@ public sealed class HttpRangeDownloader : IDownloadEngine
     private static bool IsTransient(Exception exception) => exception switch
     {
         OperationCanceledException => false,
+        HttpRequestException http when http.StatusCode is HttpStatusCode.RequestTimeout or (HttpStatusCode)429 => true,
         HttpRequestException http when http.StatusCode is null => true,
         HttpRequestException http when (int?)http.StatusCode >= 500 => true,
         IOException => true,
         _ => false
     };
 
+    private static void ValidateRequest(DownloadRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.TaskId == Guid.Empty) throw new ArgumentException("The download task ID cannot be empty.", nameof(request));
+        ArgumentNullException.ThrowIfNull(request.Media);
+        ArgumentNullException.ThrowIfNull(request.Media.LegacySegments);
+        if (string.IsNullOrWhiteSpace(request.OutputDirectory) || !Path.IsPathRooted(request.OutputDirectory)) throw new ArgumentException("The output directory must be an absolute path.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.OutputFileName) || request.OutputFileName is "." or ".." || request.OutputFileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(request.OutputFileName) != request.OutputFileName) throw new ArgumentException("The output file name must be a single safe file name.", nameof(request));
+        if (request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count == 0) throw new ArgumentException("The download request has no media tracks.", nameof(request));
+        ValidateTrack(request.VideoTrack, TrackType.Video);
+        ValidateTrack(request.AudioTrack, TrackType.Audio);
+        if (request.VideoTrack is not null && request.AudioTrack is not null && string.Equals(request.VideoTrack.TrackId, request.AudioTrack.TrackId, StringComparison.Ordinal)) throw new ArgumentException("The media track IDs must be unique.", nameof(request));
+        var segmentIds = new HashSet<int>();
+        foreach (var segment in request.Media.LegacySegments)
+        {
+            if (segment is null || segment.Index < 0 || !segmentIds.Add(segment.Index) || segment.Size is < 0 || segment.Urls is null || segment.Urls.Count == 0 || segment.Urls.Any(candidate => candidate is null || !IsHttpUrl(candidate.Url))) throw new ArgumentException("The download request contains an invalid media segment.", nameof(request));
+        }
+    }
+
+    private static void ValidateTrack(MediaTrack? track, TrackType expectedType)
+    {
+        if (track is null) return;
+        if (track.Type != expectedType || string.IsNullOrWhiteSpace(track.TrackId) || track.Size is < 0 || track.DurationSeconds is < 0 || track.Urls is null || track.Urls.Count == 0 || track.Urls.Any(candidate => candidate is null || !IsHttpUrl(candidate.Url))) throw new ArgumentException("The download request contains an invalid media track.", nameof(track));
+    }
+
+    private static bool IsHttpUrl(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 16_384 && Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is ("http" or "https") && !string.IsNullOrWhiteSpace(uri.Host) && string.IsNullOrEmpty(uri.UserInfo);
+
     private static bool IsFallbackEligible(Exception exception) => exception switch
     {
-        HttpRequestException http => http.StatusCode is null || (int?)http.StatusCode >= 500 || http.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.PreconditionFailed,
+        HttpRequestException http => http.StatusCode is null || (int?)http.StatusCode >= 500 || http.StatusCode is HttpStatusCode.RequestTimeout or (HttpStatusCode)429 or HttpStatusCode.Forbidden or HttpStatusCode.PreconditionFailed,
         IOException => true,
         _ => false
     };
+
+    private static bool ContainsHeaderInjection(string value) => value.IndexOfAny(['\r', '\n']) >= 0;
+
+    private static bool IsTrustedMediaHost(string host)
+    {
+        var normalized = host.TrimEnd('.');
+        return normalized.Equals("bilibili.com", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".bilibili.com", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("b23.tv", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".bilivideo.com", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".bilivideo.cn", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".biliapi.com", StringComparison.OrdinalIgnoreCase);
+    }
 }

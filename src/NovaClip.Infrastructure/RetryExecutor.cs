@@ -12,8 +12,11 @@ public sealed class RetryExecutor
         Func<Exception, bool> isTransient,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(isTransient);
         Exception? lastException = null;
-        var attempts = Math.Max(1, policy.MaxAttempts);
+        var attempts = Math.Clamp(policy.MaxAttempts, 1, 100);
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
