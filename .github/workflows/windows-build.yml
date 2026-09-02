@@ -3,7 +3,7 @@ name: Windows native build and acceptance
 on:
   push:
     branches: [main, refactor/beta.4-native-rebuild]
-    tags: ["v1.0.0-beta.5"]
+    tags: ["v1.0.0-beta.6"]
   pull_request:
   workflow_dispatch:
 
@@ -68,24 +68,24 @@ jobs:
         run: Get-ChildItem artifacts/windows -File | Get-FileHash -Algorithm SHA256 | Format-Table
       - uses: actions/upload-artifact@v4
         with:
-          name: NovaClip-1.0.0-beta.5-win-x64-${{ github.sha }}
+          name: NovaClip-1.0.0-beta.6-win-x64-${{ github.sha }}
           path: |
             artifacts/windows/NovaClip-win-x64-portable.zip
-            artifacts/windows/NovaClip-1.0.0-beta.5-win-x64-setup.exe
+            artifacts/windows/NovaClip-1.0.0-beta.6-win-x64-setup.exe
           if-no-files-found: error
 
   release:
-    if: github.ref == 'refs/tags/v1.0.0-beta.5'
+    if: github.ref == 'refs/tags/v1.0.0-beta.6'
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: NovaClip-1.0.0-beta.5-win-x64-${{ github.sha }}
+          name: NovaClip-1.0.0-beta.6-win-x64-${{ github.sha }}
           path: release-assets
       - uses: softprops/action-gh-release@v2
         with:
           prerelease: true
-          name: NovaClip 1.0.0-beta.5 — Startup Reliability Fix
+          name: NovaClip 1.0.0-beta.6 — Stability and Safety Fixes
           generate_release_notes: true
           files: release-assets/*
