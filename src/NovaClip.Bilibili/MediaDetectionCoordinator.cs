@@ -90,13 +90,13 @@ public sealed class MediaDetectionCoordinator : IMediaDetectionCoordinator
             catch (Exception exception)
             {
                 hadStrategyError = true;
-                var stale = false;
+                var staleFailure = false;
                 lock (_gate)
                 {
                     if (expectedGeneration != _generation)
                     {
                         snapshot = AddDiagnosticLocked("MediaDetection.StaleResultIgnored", MediaDetectionState.Observing);
-                        stale = true;
+                        staleFailure = true;
                     }
                     else
                     {
@@ -104,7 +104,7 @@ public sealed class MediaDetectionCoordinator : IMediaDetectionCoordinator
                     }
                 }
                 Publish(snapshot);
-                if (stale) return;
+                if (staleFailure) return;
                 continue;
             }
 
