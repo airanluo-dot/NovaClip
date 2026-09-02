@@ -10,6 +10,8 @@ public sealed class BrowserNavigationPolicyTests
     [Theory]
     [InlineData("https://www.bilibili.com/video/BV1xx", BrowserNavigationDecision.NavigateInCurrentView)]
     [InlineData("https://api.bilibili.com/x/player/playurl", BrowserNavigationDecision.NavigateInCurrentView)]
+    [InlineData("https://b23.tv/s/abc", BrowserNavigationDecision.NavigateInCurrentView)]
+    [InlineData("https://www.bilibili.com./video/BV1xx", BrowserNavigationDecision.NavigateInCurrentView)]
     [InlineData("javascript:alert(1)", BrowserNavigationDecision.Block)]
     [InlineData("file:///c:/secret.txt", BrowserNavigationDecision.Block)]
     public void EvaluatesExpectedPolicy(string value, BrowserNavigationDecision expected) => Assert.Equal(expected, _policy.Evaluate(new Uri(value), BrowserNavigationKind.NewWindow));
