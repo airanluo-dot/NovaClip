@@ -7,17 +7,34 @@ public partial class App : Application
 {
     public static MainWindow? MainWindow { get; private set; }
     private Window? _startupFailureWindow;
+    private bool _resourcesFailed;
 
     public App()
     {
-        InitializeComponent();
         StartupDiagnostics.Info("App.Start");
-        StartupDiagnostics.Info("Resources.Ready");
-        UnhandledException += (_, args) => StartupDiagnostics.Error("WINUI_UNHANDLED_EXCEPTION", args.Exception);
+        try
+        {
+            InitializeComponent();
+            StartupDiagnostics.Info("Resources.Ready");
+        }
+        catch (Exception exception)
+        {
+            // Keep a resources/XAML failure visible instead of allowing the process to exit with a blank window.
+            _resourcesFailed = true;
+            StartupDiagnostics.Error("APP_RESOURCES_FAILED", exception);
+            ShowStartupFailure(exception);
+        }
+        UnhandledException += (_, args) =>
+        {
+            StartupDiagnostics.Error("WINUI_UNHANDLED_EXCEPTION", args.Exception);
+            args.Handled = true;
+            if (MainWindow is null) ShowStartupFailure(args.Exception);
+        };
     }
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
+        if (_resourcesFailed) return;
         try
         {
             await AppServices.InitializeAsync();
@@ -44,17 +61,29 @@ public partial class App : Application
 
     private void ShowStartupFailure(Exception exception)
     {
+        var fallbackTitle = "NovaClip startup failed";
+        var fallbackMessage = $"NovaClip could not complete startup.\n\n{exception.Message}\n\nDiagnostic log:\n{StartupDiagnostics.LogPath}";
         try
         {
-            var details = $"NovaClip 无法完成启动。\n\n{exception.Message}\n\n诊断日志：\n{StartupDiagnostics.LogPath}";
+            var text = new LocalizationService();
+            fallbackTitle = text.GetString("StartupFailure_Title") is { Length: > 0 } localizedTitle ? localizedTitle : fallbackTitle;
+            fallbackMessage = text.Format("StartupFailure_Message", exception.Message, StartupDiagnostics.LogPath);
+        }
+        catch (Exception localizationException)
+        {
+            StartupDiagnostics.Error("STARTUP_FAILURE_LOCALIZATION_FAILED", localizationException);
+        }
+
+        try
+        {
             _startupFailureWindow = new Window
             {
-                Title = "NovaClip 启动失败",
+                Title = fallbackTitle,
                 Content = new ScrollViewer
                 {
                     Content = new TextBlock
                     {
-                        Text = details,
+                        Text = fallbackMessage,
                         TextWrapping = TextWrapping.Wrap,
                         Margin = new Thickness(24)
                     }
@@ -62,9 +91,9 @@ public partial class App : Application
             };
             _startupFailureWindow.Activate();
         }
-        catch (Exception fallbackException)
+        catch (Exception windowException)
         {
-            StartupDiagnostics.Error("STARTUP_FAILURE_UI_FAILED", fallbackException);
+            StartupDiagnostics.Error("STARTUP_FAILURE_UI_FAILED", windowException);
         }
     }
 }

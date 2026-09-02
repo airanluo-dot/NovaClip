@@ -15,6 +15,7 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         Title = new LocalizationService().GetString("MainWindow_Title");
         TryConfigureBackdrop();
+        ApplyTheme(AppServices.Settings.Theme);
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         NavigateTo("browser");
@@ -40,6 +41,16 @@ public sealed partial class MainWindow : Window
     public void RunSmokeNavigation()
     {
         foreach (var tag in new[] { "downloads", "history", "settings", "browser" }) NavigateTo(tag);
+    }
+
+    public void ApplyTheme(string theme)
+    {
+        RootNavigationView.RequestedTheme = theme switch
+        {
+            "Light" => ElementTheme.Light,
+            "Dark" => ElementTheme.Dark,
+            _ => ElementTheme.Default
+        };
     }
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
