@@ -6,8 +6,10 @@ namespace NovaClip.App;
 
 public sealed class WindowsSettingsStore
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
+    private const int MaxSettingsBytes = 1_000_000;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private readonly object _saveGate = new();
     private readonly string _settingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "NovaClip",
@@ -28,6 +30,7 @@ public sealed class WindowsSettingsStore
     public bool AutoCheckUpdates { get; set; } = true;
     public UpdateChannel UpdateChannel { get; set; } = UpdateChannel.Preview;
     public string UpdateFeedRepository { get; set; } = "airanluo-dot/NovaClip";
+    public string Theme { get; set; } = "System";
     public static string? GitHubToken => Environment.GetEnvironmentVariable("NOVACLIP_GITHUB_TOKEN");
 
     public async Task LoadAsync()
@@ -36,11 +39,12 @@ public sealed class WindowsSettingsStore
 
         try
         {
+            if (new FileInfo(_settingsPath).Length > MaxSettingsBytes) throw new InvalidDataException("The settings file is too large.");
             var json = await File.ReadAllTextAsync(_settingsPath).ConfigureAwait(true);
             var document = JsonSerializer.Deserialize<SettingsDocument>(json, JsonOptions);
             if (document is null) return;
 
-            if (!string.IsNullOrWhiteSpace(document.DownloadDirectory)) DownloadDirectory = document.DownloadDirectory;
+            if (!string.IsNullOrWhiteSpace(document.DownloadDirectory) && Path.IsPathRooted(document.DownloadDirectory)) DownloadDirectory = document.DownloadDirectory;
             MaxConcurrentTasks = Math.Clamp(document.MaxConcurrentTasks, 1, 3);
             MaxRetryAttempts = Math.Clamp(document.MaxRetryAttempts, 1, 8);
             DefaultQuality = document.DefaultQuality ?? DefaultQuality;
@@ -49,12 +53,13 @@ public sealed class WindowsSettingsStore
             BrowserStartup = document.BrowserStartup ?? BrowserStartup;
             ExternalLinkBehavior = document.ExternalLinkBehavior ?? ExternalLinkBehavior;
             DebugLogging = document.DebugLogging;
-            FfmpegPath = string.IsNullOrWhiteSpace(document.FfmpegPath) ? null : document.FfmpegPath;
+            FfmpegPath = IsUsableFfmpegPath(document.FfmpegPath) ? document.FfmpegPath : null;
             MergeAfterDownload = document.MergeAfterDownload;
             DeleteTemporaryFilesAfterMerge = document.DeleteTemporaryFilesAfterMerge;
             AutoCheckUpdates = document.AutoCheckUpdates;
-            UpdateChannel = document.UpdateChannel;
+            if (Enum.IsDefined(document.UpdateChannel)) UpdateChannel = document.UpdateChannel;
             if (!string.IsNullOrWhiteSpace(document.UpdateFeedRepository)) UpdateFeedRepository = document.UpdateFeedRepository;
+            if (document.Theme is "System" or "Light" or "Dark") Theme = document.Theme;
         }
         catch (Exception exception)
         {
@@ -64,36 +69,40 @@ public sealed class WindowsSettingsStore
 
     public void Save()
     {
-        try
+        lock (_saveGate)
         {
-            var directory = Path.GetDirectoryName(_settingsPath)!;
-            Directory.CreateDirectory(directory);
-            var document = new SettingsDocument(
-                CurrentSchemaVersion,
-                DownloadDirectory,
-                Math.Clamp(MaxConcurrentTasks, 1, 3),
-                Math.Clamp(MaxRetryAttempts, 1, 8),
-                FfmpegPath,
-                MergeAfterDownload,
-                DeleteTemporaryFilesAfterMerge,
-                AutoCheckUpdates,
-                UpdateChannel,
-                UpdateFeedRepository,
-                DefaultQuality,
-                DefaultCodec,
-                RetryPreset,
-                BrowserStartup,
-                ExternalLinkBehavior,
-                DebugLogging);
-            var json = JsonSerializer.Serialize(document, JsonOptions);
-            var tempPath = _settingsPath + ".tmp";
-            File.WriteAllText(tempPath, json);
-            File.Move(tempPath, _settingsPath, true);
-        }
-        catch (Exception exception)
-        {
-            StartupDiagnostics.Warning("Settings could not be saved.", exception);
-            throw;
+            try
+            {
+                var directory = Path.GetDirectoryName(_settingsPath)!;
+                Directory.CreateDirectory(directory);
+                var document = new SettingsDocument(
+                    CurrentSchemaVersion,
+                    DownloadDirectory,
+                    Math.Clamp(MaxConcurrentTasks, 1, 3),
+                    Math.Clamp(MaxRetryAttempts, 1, 8),
+                    FfmpegPath,
+                    MergeAfterDownload,
+                    DeleteTemporaryFilesAfterMerge,
+                    AutoCheckUpdates,
+                    UpdateChannel,
+                    UpdateFeedRepository,
+                    DefaultQuality,
+                    DefaultCodec,
+                    RetryPreset,
+                    BrowserStartup,
+                    ExternalLinkBehavior,
+                    DebugLogging,
+                    Theme);
+                var json = JsonSerializer.Serialize(document, JsonOptions);
+                var tempPath = _settingsPath + ".tmp";
+                File.WriteAllText(tempPath, json);
+                File.Move(tempPath, _settingsPath, true);
+            }
+            catch (Exception exception)
+            {
+                StartupDiagnostics.Warning("Settings could not be saved.", exception);
+                throw;
+            }
         }
     }
 
@@ -104,9 +113,15 @@ public sealed class WindowsSettingsStore
         return options;
     }
 
+    private static bool IsUsableFfmpegPath(string? path) =>
+        !string.IsNullOrWhiteSpace(path) &&
+        Path.IsPathRooted(path) &&
+        string.Equals(Path.GetExtension(path), ".exe", StringComparison.OrdinalIgnoreCase) &&
+        File.Exists(path);
+
     private sealed record SettingsDocument(
         int SchemaVersion,
-        string DownloadDirectory,
+        string? DownloadDirectory,
         int MaxConcurrentTasks,
         int MaxRetryAttempts,
         string? FfmpegPath,
@@ -114,11 +129,12 @@ public sealed class WindowsSettingsStore
         bool DeleteTemporaryFilesAfterMerge,
         bool AutoCheckUpdates,
         UpdateChannel UpdateChannel,
-        string UpdateFeedRepository,
+        string? UpdateFeedRepository,
         string? DefaultQuality = null,
         string? DefaultCodec = null,
         string? RetryPreset = null,
         string? BrowserStartup = null,
         string? ExternalLinkBehavior = null,
-        bool DebugLogging = false);
+        bool DebugLogging = false,
+        string? Theme = null);
 }

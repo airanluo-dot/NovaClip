@@ -13,6 +13,7 @@ public sealed class WindowsFfmpegService : IFfmpegService
     }
 
     public bool IsAvailable => FindFfmpeg() is not null;
+    public string? Locate() => FindFfmpeg();
 
     public async Task<FfmpegResult> MergeAsync(string videoPath, string audioPath, string outputPath, IProgress<double>? progress, CancellationToken cancellationToken)
     {
@@ -47,9 +48,10 @@ public sealed class WindowsFfmpegService : IFfmpegService
         {
             if (!process.Start()) return new FfmpegResult(false, -1, null, "无法启动 ffmpeg.exe。");
             var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
-            _ = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
             var error = await stderr.ConfigureAwait(false);
+            await stdout.ConfigureAwait(false);
             progress?.Report(1);
             var success = process.ExitCode == 0 && File.Exists(outputPath) && new FileInfo(outputPath).Length > 0;
             return new FfmpegResult(success, process.ExitCode, success ? outputPath : null, success ? null : error.Trim());
@@ -63,6 +65,43 @@ public sealed class WindowsFfmpegService : IFfmpegService
         {
             TryKill(process);
             return new FfmpegResult(false, -1, null, exception.Message);
+        }
+    }
+
+    public async Task<bool> TestAsync(CancellationToken cancellationToken = default)
+    {
+        var executable = FindFfmpeg();
+        if (executable is null) return false;
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            }
+        };
+        process.StartInfo.ArgumentList.Add("-version");
+        try
+        {
+            if (!process.Start()) return false;
+            var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
+            return process.ExitCode == 0;
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
+        catch
+        {
+            TryKill(process);
+            return false;
         }
     }
 
@@ -81,8 +120,15 @@ public sealed class WindowsFfmpegService : IFfmpegService
     {
         try
         {
-            using var process = Process.Start(new ProcessStartInfo { FileName = "where.exe", Arguments = executable, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
-            process?.WaitForExit(2000);
+            var startInfo = new ProcessStartInfo { FileName = "where.exe", UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+            startInfo.ArgumentList.Add(executable);
+            using var process = Process.Start(startInfo);
+            if (process is null) return false;
+            if (!process.WaitForExit(2000))
+            {
+                TryKill(process);
+                return false;
+            }
             return process?.ExitCode == 0;
         }
         catch
