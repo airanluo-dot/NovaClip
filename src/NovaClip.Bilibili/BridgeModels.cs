@@ -33,6 +33,7 @@ public static class BilibiliBridgeMessageParser
     public static bool TryParse(string json, out BilibiliBridgeMessage? message)
     {
         message = null;
+        if (string.IsNullOrWhiteSpace(json) || json.Length > 2_000_000) return false;
         try
         {
             using var document = JsonDocument.Parse(json);
@@ -59,15 +60,26 @@ public static class BilibiliBridgeMessageParser
         {
             return false;
         }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     public static bool TryReadPageContext(BilibiliBridgeMessage message, out BilibiliPageContext? context)
     {
         context = null;
-        if (message.Type != BilibiliBridgeMessageType.PageContextChanged) return false;
+        if (message is null || message.Type != BilibiliBridgeMessageType.PageContextChanged) return false;
         var payload = message.Payload;
-        if (!payload.TryGetProperty("url", out var urlProperty) || !Uri.TryCreate(urlProperty.GetString(), UriKind.Absolute, out var uri) || !IsBilibiliHost(uri.Host)) return false;
-        var kind = payload.TryGetProperty("kind", out var kindProperty) ? kindProperty.GetString() ?? "unknown" : "unknown";
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("url", out var urlProperty) ||
+            urlProperty.ValueKind != JsonValueKind.String ||
+            !Uri.TryCreate(urlProperty.GetString(), UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") ||
+            !IsBilibiliHost(uri.Host)) return false;
+        var kind = payload.TryGetProperty("kind", out var kindProperty) && kindProperty.ValueKind == JsonValueKind.String
+            ? kindProperty.GetString() ?? "unknown"
+            : "unknown";
         context = new BilibiliPageContext(
             uri.ToString(),
             kind,
@@ -81,7 +93,13 @@ public static class BilibiliBridgeMessageParser
         return true;
     }
 
-    private static bool IsBilibiliHost(string host) => host.Equals("bilibili.com", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".bilibili.com", StringComparison.OrdinalIgnoreCase);
+    private static bool IsBilibiliHost(string host)
+    {
+        var normalized = host.TrimEnd('.');
+        return normalized.Equals("bilibili.com", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".bilibili.com", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("b23.tv", StringComparison.OrdinalIgnoreCase);
+    }
     private static string? GetString(JsonElement element, string name) => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     private static long? GetInt64(JsonElement element, string name)
     {
