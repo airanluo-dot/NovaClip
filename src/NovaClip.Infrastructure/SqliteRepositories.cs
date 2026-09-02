@@ -4,7 +4,7 @@ using System.Globalization;
 
 namespace NovaClip.Infrastructure;
 
-public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHistoryRepository
+public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHistoryRepository, IDisposable
 {
     private readonly string _connectionString;
     private readonly SemaphoreSlim _writeGate = new(1, 1);
@@ -205,5 +205,11 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
     private static void ValidateTableName(string table)
     {
         if (table is not ("DownloadTasks" or "DownloadHistory")) throw new ArgumentException("Unsupported persistence table.", nameof(table));
+    }
+
+    public void Dispose()
+    {
+        _writeGate.Dispose();
+        GC.SuppressFinalize(this);
     }
 }
