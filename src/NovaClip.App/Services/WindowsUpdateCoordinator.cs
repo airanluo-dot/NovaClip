@@ -6,7 +6,7 @@ using NovaClip.Infrastructure;
 
 namespace NovaClip.App;
 
-public sealed class WindowsUpdateCoordinator
+public sealed class WindowsUpdateCoordinator : IDisposable
 {
     private readonly IUpdateService _updateService;
     private readonly WindowsSettingsStore _settings;
@@ -118,5 +118,11 @@ public sealed class WindowsUpdateCoordinator
         }
         Directory.CreateDirectory(destination);
         ZipFile.ExtractToDirectory(archivePath, destination);
+    }
+
+    public void Dispose()
+    {
+        _applyGate.Dispose();
+        GC.SuppressFinalize(this);
     }
 }
