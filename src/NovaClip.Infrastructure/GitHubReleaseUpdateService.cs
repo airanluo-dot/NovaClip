@@ -62,7 +62,7 @@ public sealed class GitHubReleaseUpdateService : IUpdateService
             var assets = release.TryGetProperty("assets", out var assetArray) && assetArray.ValueKind == JsonValueKind.Array
                 ? assetArray.EnumerateArray().Select(ParseAsset).Where(asset => asset is not null).Cast<AppUpdateAsset>().ToArray()
                 : [];
-            var publishedAt = release.TryGetProperty("published_at", out var published) && published.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(published.GetString(), out var parsedPublishedAt) ? parsedPublishedAt : null;
+            var publishedAt = release.TryGetProperty("published_at", out var published) && published.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(published.GetString(), out var parsedPublishedAt) ? (DateTimeOffset?)parsedPublishedAt : null;
             var candidate = new AppUpdateInfo(
                 candidateVersion.ToString(),
                 prerelease,
@@ -132,7 +132,7 @@ public sealed class GitHubReleaseUpdateService : IUpdateService
         var apiUrl = element.TryGetProperty("url", out var url) && url.ValueKind == JsonValueKind.String ? url.GetString() : null;
         var browserUrl = element.TryGetProperty("browser_download_url", out var browser) && browser.ValueKind == JsonValueKind.String ? browser.GetString() : null;
         var urlValue = new[] { apiUrl, browserUrl }.FirstOrDefault(candidate => Uri.TryCreate(candidate, UriKind.Absolute, out var candidateUri) && IsTrustedGithubUri(candidateUri));
-        var sizeValue = element.TryGetProperty("size", out var size) && size.ValueKind == JsonValueKind.Number && size.TryGetInt64(out var parsedSize) && parsedSize >= 0 ? parsedSize : null;
+        var sizeValue = element.TryGetProperty("size", out var size) && size.ValueKind == JsonValueKind.Number && size.TryGetInt64(out var parsedSize) && parsedSize >= 0 ? (long?)parsedSize : null;
         var contentType = element.TryGetProperty("content_type", out var type) && type.ValueKind == JsonValueKind.String ? type.GetString() : null;
         var digestValue = element.TryGetProperty("digest", out var digest) && digest.ValueKind == JsonValueKind.String ? digest.GetString() : null;
         return string.IsNullOrWhiteSpace(nameValue) || string.IsNullOrWhiteSpace(urlValue)
