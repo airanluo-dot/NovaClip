@@ -172,8 +172,17 @@ public sealed class WindowsUpdateCoordinator : IDisposable
 
         var manifestJson = await File.ReadAllTextAsync(manifestPath, cancellationToken).ConfigureAwait(false);
         var signature = await File.ReadAllTextAsync(signaturePath, cancellationToken).ConfigureAwait(false);
-        if (manifestJson.Length > MaxSignedManifestCharacters || signature.Length > MaxSignatureCharacters ||
-            !SignedUpdateManifestVerifier.Verify(manifestJson, signature.Trim(), _trustedPublicKeyPem, out var manifest, out var error))
+        if (manifestJson.Length > MaxSignedManifestCharacters || signature.Length > MaxSignatureCharacters)
+        {
+            throw new InvalidDataException("签名清单大小超过安全上限，已拒绝执行。");
+        }
+
+        if (!SignedUpdateManifestVerifier.Verify(
+                manifestJson,
+                signature.Trim(),
+                _trustedPublicKeyPem,
+                out var manifest,
+                out var error))
         {
             throw new InvalidDataException(error ?? "签名清单验证失败，已拒绝执行。");
         }
