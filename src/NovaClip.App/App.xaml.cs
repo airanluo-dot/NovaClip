@@ -7,6 +7,7 @@ public partial class App : Application
 {
     public static MainWindow? MainWindow { get; private set; }
     private Window? _startupFailureWindow;
+    private SingleInstanceCoordinator? _singleInstance;
     private bool _resourcesFailed;
 
     public App()
@@ -39,6 +40,10 @@ public partial class App : Application
         if (_resourcesFailed) return;
         try
         {
+            _singleInstance = await SingleInstanceCoordinator.AcquireOrForwardAsync();
+            if (_singleInstance is null) return;
+            _singleInstance.ActivateRequested += SingleInstance_ActivateRequested;
+
             await AppServices.InitializeAsync();
             StartupDiagnostics.Info("Services.Ready");
             if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") == "1")
@@ -62,6 +67,15 @@ public partial class App : Application
             AppServices.BeginShutdown();
             ShowStartupFailure(exception);
         }
+    }
+
+    private void SingleInstance_ActivateRequested(object? sender, EventArgs e)
+    {
+        MainWindow?.DispatcherQueue.TryEnqueue(() =>
+        {
+            MainWindow?.Activate();
+            Pages.BrowserPage.Current?.FocusAddressBar();
+        });
     }
 
     private void ShowStartupFailure(Exception exception)
