@@ -51,7 +51,8 @@ public sealed class OutputReservationService : IOutputReservationService
             catch (IOException)
             {
                 // Another task may own the marker. Reclaim only markers whose owner process is gone.
-                TryReclaimStaleMarker(markerPath);
+                // Retry the same candidate after a stale marker is removed.
+                if (TryReclaimStaleMarker(markerPath)) index--;
             }
         }
 
@@ -120,11 +121,11 @@ public sealed class OutputReservationService : IOutputReservationService
         }
     }
 
-    private static void TryReclaimStaleMarker(string path)
+    private static bool TryReclaimStaleMarker(string path)
     {
         try
         {
-            if (!File.Exists(path)) return;
+            if (!File.Exists(path)) return false;
             var parts = File.ReadAllText(path, Encoding.UTF8).Split('|');
             var validTimestamp = parts.Length == 3 && DateTimeOffset.TryParse(
                 parts[2],
@@ -134,7 +135,9 @@ public sealed class OutputReservationService : IOutputReservationService
             var ownerAlive = parts.Length == 3 &&
                 int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var processId) &&
                 IsProcessAlive(processId);
-            if (!validTimestamp || !ownerAlive) File.Delete(path);
+            if (validTimestamp && ownerAlive) return false;
+            File.Delete(path);
+            return true;
         }
         catch (IOException)
         {
@@ -144,6 +147,8 @@ public sealed class OutputReservationService : IOutputReservationService
         {
             // Keep the marker when its ownership cannot be established.
         }
+
+        return false;
     }
 
     private static bool IsProcessAlive(int processId)

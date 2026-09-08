@@ -173,6 +173,18 @@ public sealed class DownloadManagerTests
         }
     }
 
+    private static string CreateRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "NovaClipTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static void DeleteRoot(string root)
+    {
+        if (Directory.Exists(root)) Directory.Delete(root, true);
+    }
+
     private sealed class DashStagingEngine : IDownloadEngine
     {
         public async Task DownloadAsync(DownloadRequest request, IProgress<DownloadProgress> progress, CancellationToken cancellationToken)
