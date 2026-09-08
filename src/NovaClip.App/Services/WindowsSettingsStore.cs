@@ -1,8 +1,27 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using NovaClip.Core;
 
 namespace NovaClip.App;
+
+public sealed record WindowsSettingsSnapshot(
+    string DownloadDirectory,
+    int MaxConcurrentTasks,
+    int MaxRetryAttempts,
+    string DefaultQuality,
+    string DefaultCodec,
+    string RetryPreset,
+    string BrowserStartup,
+    string ExternalLinkBehavior,
+    bool DebugLogging,
+    string? FfmpegPath,
+    bool MergeAfterDownload,
+    bool DeleteTemporaryFilesAfterMerge,
+    bool AutoCheckUpdates,
+    UpdateChannel UpdateChannel,
+    string UpdateFeedRepository,
+    string Theme);
 
 public sealed class WindowsSettingsStore
 {
@@ -42,7 +61,7 @@ public sealed class WindowsSettingsStore
             if (new FileInfo(_settingsPath).Length > MaxSettingsBytes) throw new InvalidDataException("The settings file is too large.");
             var json = await File.ReadAllTextAsync(_settingsPath).ConfigureAwait(true);
             var document = JsonSerializer.Deserialize<SettingsDocument>(json, JsonOptions);
-            if (document is null) return;
+            if (document is null || document.SchemaVersion > CurrentSchemaVersion) throw new InvalidDataException("The settings schema is newer than this application.");
 
             if (!string.IsNullOrWhiteSpace(document.DownloadDirectory) && Path.IsPathRooted(document.DownloadDirectory)) DownloadDirectory = document.DownloadDirectory;
             MaxConcurrentTasks = Math.Clamp(document.MaxConcurrentTasks, 1, 3);
@@ -60,11 +79,67 @@ public sealed class WindowsSettingsStore
             if (Enum.IsDefined(document.UpdateChannel)) UpdateChannel = document.UpdateChannel;
             if (!string.IsNullOrWhiteSpace(document.UpdateFeedRepository)) UpdateFeedRepository = document.UpdateFeedRepository;
             if (document.Theme is "System" or "Light" or "Dark") Theme = document.Theme;
+            Validate();
         }
         catch (Exception exception)
         {
             StartupDiagnostics.Warning("Settings could not be loaded. Defaults will be used.", exception);
         }
+    }
+
+    public WindowsSettingsSnapshot Capture() =>
+        new(
+            DownloadDirectory,
+            MaxConcurrentTasks,
+            MaxRetryAttempts,
+            DefaultQuality,
+            DefaultCodec,
+            RetryPreset,
+            BrowserStartup,
+            ExternalLinkBehavior,
+            DebugLogging,
+            FfmpegPath,
+            MergeAfterDownload,
+            DeleteTemporaryFilesAfterMerge,
+            AutoCheckUpdates,
+            UpdateChannel,
+            UpdateFeedRepository,
+            Theme);
+
+    public void Restore(WindowsSettingsSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        DownloadDirectory = snapshot.DownloadDirectory;
+        MaxConcurrentTasks = snapshot.MaxConcurrentTasks;
+        MaxRetryAttempts = snapshot.MaxRetryAttempts;
+        DefaultQuality = snapshot.DefaultQuality;
+        DefaultCodec = snapshot.DefaultCodec;
+        RetryPreset = snapshot.RetryPreset;
+        BrowserStartup = snapshot.BrowserStartup;
+        ExternalLinkBehavior = snapshot.ExternalLinkBehavior;
+        DebugLogging = snapshot.DebugLogging;
+        FfmpegPath = snapshot.FfmpegPath;
+        MergeAfterDownload = snapshot.MergeAfterDownload;
+        DeleteTemporaryFilesAfterMerge = snapshot.DeleteTemporaryFilesAfterMerge;
+        AutoCheckUpdates = snapshot.AutoCheckUpdates;
+        UpdateChannel = snapshot.UpdateChannel;
+        UpdateFeedRepository = snapshot.UpdateFeedRepository;
+        Theme = snapshot.Theme;
+    }
+
+    public void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(DownloadDirectory) || !Path.IsPathRooted(DownloadDirectory)) throw new InvalidDataException("The download directory must be absolute.");
+        if (MaxConcurrentTasks is < 1 or > 3 || MaxRetryAttempts is < 1 or > 8) throw new InvalidDataException("The download limits are outside the supported range.");
+        if (DefaultQuality is not ("Highest" or "Player" or "1080P" or "720P")) throw new InvalidDataException("The default quality is invalid.");
+        if (DefaultCodec is not ("Auto" or "AVC" or "HEVC" or "AV1")) throw new InvalidDataException("The default codec is invalid.");
+        if (RetryPreset is not ("Standard" or "Aggressive" or "Off")) throw new InvalidDataException("The retry preset is invalid.");
+        if (BrowserStartup is not ("Home" or "LastPage")) throw new InvalidDataException("The browser startup option is invalid.");
+        if (ExternalLinkBehavior is not ("System" or "Ask")) throw new InvalidDataException("The external-link option is invalid.");
+        if (!Enum.IsDefined(UpdateChannel)) throw new InvalidDataException("The update channel is invalid.");
+        if (string.IsNullOrWhiteSpace(UpdateFeedRepository) || UpdateFeedRepository.Length > 200 || UpdateFeedRepository.Count(character => character == '/') != 1) throw new InvalidDataException("The update repository is invalid.");
+        if (Theme is not ("System" or "Light" or "Dark")) throw new InvalidDataException("The theme is invalid.");
+        if (FfmpegPath is not null && !IsUsableFfmpegPath(FfmpegPath)) throw new InvalidDataException("The FFmpeg path is invalid.");
     }
 
     public void Save()
@@ -73,6 +148,7 @@ public sealed class WindowsSettingsStore
         {
             try
             {
+                Validate();
                 var directory = Path.GetDirectoryName(_settingsPath)!;
                 Directory.CreateDirectory(directory);
                 var document = new SettingsDocument(
@@ -94,9 +170,15 @@ public sealed class WindowsSettingsStore
                     DebugLogging,
                     Theme);
                 var json = JsonSerializer.Serialize(document, JsonOptions);
-                var tempPath = _settingsPath + ".tmp";
-                File.WriteAllText(tempPath, json);
-                File.Move(tempPath, _settingsPath, true);
+                var tempPath = _settingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+                using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, leaveOpen: true))
+                {
+                    writer.Write(json);
+                    writer.Flush();
+                    stream.Flush(flushToDisk: true);
+                }
+                File.Move(tempPath, _settingsPath, overwrite: true);
             }
             catch (Exception exception)
             {

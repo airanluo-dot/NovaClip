@@ -42,22 +42,23 @@ public sealed partial class SettingsPage : Page
         if (_loading) return;
         try
         {
-            var settings = AppServices.Settings;
-            if (ConcurrencyButtons.SelectedItem is RadioButton concurrency && int.TryParse(concurrency.Tag?.ToString(), out var count)) settings.MaxConcurrentTasks = count;
-            settings.Theme = SelectedTag(ThemeBox) ?? settings.Theme;
-            settings.DefaultQuality = SelectedTag(QualityBox) ?? settings.DefaultQuality;
-            settings.DefaultCodec = SelectedTag(CodecBox) ?? settings.DefaultCodec;
-            settings.RetryPreset = SelectedTag(RetryBox) ?? settings.RetryPreset;
-            settings.MaxRetryAttempts = settings.RetryPreset switch { "Aggressive" => 6, "Off" => 1, _ => 3 };
-            settings.BrowserStartup = SelectedTag(StartupBox) ?? settings.BrowserStartup;
-            settings.ExternalLinkBehavior = SelectedTag(ExternalLinksBox) ?? settings.ExternalLinkBehavior;
-            settings.MergeAfterDownload = MergeToggle.IsOn;
-            settings.DeleteTemporaryFilesAfterMerge = DeleteTempToggle.IsOn;
-            settings.AutoCheckUpdates = AutoUpdateToggle.IsOn;
-            settings.DebugLogging = DebugToggle.IsOn;
-            if (ChannelButtons.SelectedItem is RadioButton channel && Enum.TryParse<UpdateChannel>(channel.Tag?.ToString(), out var parsed)) settings.UpdateChannel = parsed;
-            settings.Save();
-            App.MainWindow?.ApplyTheme(settings.Theme);
+            AppServices.SettingsCoordinator.Apply(settings =>
+            {
+                if (ConcurrencyButtons.SelectedItem is RadioButton concurrency && int.TryParse(concurrency.Tag?.ToString(), out var count)) settings.MaxConcurrentTasks = count;
+                settings.Theme = SelectedTag(ThemeBox) ?? settings.Theme;
+                settings.DefaultQuality = SelectedTag(QualityBox) ?? settings.DefaultQuality;
+                settings.DefaultCodec = SelectedTag(CodecBox) ?? settings.DefaultCodec;
+                settings.RetryPreset = SelectedTag(RetryBox) ?? settings.RetryPreset;
+                settings.MaxRetryAttempts = settings.RetryPreset switch { "Aggressive" => 6, "Off" => 1, _ => 3 };
+                settings.BrowserStartup = SelectedTag(StartupBox) ?? settings.BrowserStartup;
+                settings.ExternalLinkBehavior = SelectedTag(ExternalLinksBox) ?? settings.ExternalLinkBehavior;
+                settings.MergeAfterDownload = MergeToggle.IsOn;
+                settings.DeleteTemporaryFilesAfterMerge = DeleteTempToggle.IsOn;
+                settings.AutoCheckUpdates = AutoUpdateToggle.IsOn;
+                settings.DebugLogging = DebugToggle.IsOn;
+                if (ChannelButtons.SelectedItem is RadioButton channel && Enum.TryParse<UpdateChannel>(channel.Tag?.ToString(), out var parsed)) settings.UpdateChannel = parsed;
+            });
+            App.MainWindow?.ApplyTheme(AppServices.Settings.Theme);
             SettingsInfoBar.Severity = InfoBarSeverity.Success;
             SettingsInfoBar.Message = _text.GetString("Settings_Saved");
             SettingsInfoBar.IsOpen = true;
@@ -78,9 +79,8 @@ public sealed partial class SettingsPage : Page
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
             var folder = await picker.PickSingleFolderAsync();
             if (folder is null) return;
-            AppServices.Settings.DownloadDirectory = folder.Path;
+            AppServices.SettingsCoordinator.Apply(settings => settings.DownloadDirectory = folder.Path);
             DownloadDirectoryText.Text = folder.Path;
-            AppServices.Settings.Save();
         }
         catch (Exception exception)
         {
@@ -126,8 +126,7 @@ public sealed partial class SettingsPage : Page
     {
         try
         {
-            AppServices.Settings.FfmpegPath = null;
-            AppServices.Settings.Save();
+            AppServices.SettingsCoordinator.Apply(settings => settings.FfmpegPath = null);
             RefreshFfmpegStatus();
         }
         catch (Exception exception)
@@ -135,6 +134,7 @@ public sealed partial class SettingsPage : Page
             ShowSettingsError("SETTINGS_SAVE_FAILED", exception);
         }
     }
+
     private async void ChooseFfmpeg_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -145,8 +145,7 @@ public sealed partial class SettingsPage : Page
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
             var file = await picker.PickSingleFileAsync();
             if (file is null) return;
-            AppServices.Settings.FfmpegPath = file.Path;
-            AppServices.Settings.Save();
+            AppServices.SettingsCoordinator.Apply(settings => settings.FfmpegPath = file.Path);
             RefreshFfmpegStatus();
         }
         catch (Exception exception)
@@ -154,6 +153,7 @@ public sealed partial class SettingsPage : Page
             ShowSettingsError("SETTINGS_FFMPEG_FAILED", exception);
         }
     }
+
     private async void TestFfmpeg_Click(object sender, RoutedEventArgs e)
     {
         try

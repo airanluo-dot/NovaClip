@@ -19,6 +19,7 @@ public static class AppServices
     public static DownloadManager Downloads { get; private set; } = null!;
     public static GitHubReleaseUpdateService UpdateService { get; private set; } = null!;
     public static WindowsUpdateCoordinator UpdateCoordinator { get; private set; } = null!;
+    public static SettingsApplicationCoordinator SettingsCoordinator { get; private set; } = null!;
     public static bool IsPortableInstall { get; } = File.Exists(Path.Combine(AppContext.BaseDirectory, "portable.marker"));
     public static bool IsInitialized { get; private set; }
     public static Task ShutdownTask => _shutdownTask ?? Task.CompletedTask;
@@ -77,6 +78,7 @@ public static class AppServices
                 Repository);
             UpdateService = new GitHubReleaseUpdateService(UpdateHttpClient, Settings.UpdateFeedRepository, WindowsSettingsStore.GitHubToken);
             UpdateCoordinator = new WindowsUpdateCoordinator(UpdateService, Settings);
+            SettingsCoordinator = new SettingsApplicationCoordinator(Settings, Downloads);
 
             StartupDiagnostics.Info("Initializing SQLite repository.");
             await Repository.InitializeAsync(cancellationToken).ConfigureAwait(true);
