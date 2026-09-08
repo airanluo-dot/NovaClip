@@ -1,3 +1,5 @@
+> Historical planning document. The beta.7 remediation plan and `docs/REMEDIATION_BETA7.md` are authoritative for the current production source and release gate.
+
 # NovaClip 1.0.0-beta.4 — Native Windows Rebuild 项目规划
 
 > **文档性质：强制执行的下一测试版主规划**

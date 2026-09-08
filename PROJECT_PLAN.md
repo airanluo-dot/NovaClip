@@ -1,3 +1,5 @@
+> Historical planning document. The beta.7 remediation plan and `docs/REMEDIATION_BETA7.md` are authoritative for the current production source and release gate.
+
 # Bilibili 原生 Windows 下载管理器 —— Codex 可直接执行的项目规划
 
 > 文档定位：这是项目的 **唯一主规划 / 实施规范 / 验收标准**。Codex 在执行本项目时，应以本文件为最高优先级的项目说明，并把用户提供的 `bilibili-helper-3.0.4.zip` 仅作为“行为参考实现 / 逆向参考资料”。
