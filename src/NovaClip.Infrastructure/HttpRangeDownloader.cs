@@ -305,6 +305,10 @@ public sealed class HttpRangeDownloader : IDownloadEngine
 
         var startingLength = append ? existingLength : 0L;
         var totalLength = GetTotalLength(response, startingLength);
+        if (append && metadata?.TotalLength is > 0 && totalLength is > 0 && totalLength != metadata.TotalLength.Value)
+        {
+            throw new HttpRequestException("The media resource length changed while resuming.", null, HttpStatusCode.PreconditionFailed);
+        }
         if (track.Size is > 0 && totalLength is > 0 && totalLength != track.Size.Value)
         {
             throw new IOException($"Expected {track.Size.Value} media bytes but the response declares {totalLength}.");
