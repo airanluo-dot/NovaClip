@@ -29,7 +29,17 @@ public interface IBilibiliEndpointProvider { Uri GetPlayUrlEndpoint(PageIdentity
 public interface IBilibiliSessionAdapter { Task<IReadOnlyDictionary<string, string>> GetRequestCookiesAsync(CancellationToken cancellationToken); }
 public interface IBilibiliUrlResolver { bool TryResolve(string input, out Uri uri); }
 public interface IMediaDetectionStrategy { string Name { get; } Task<MediaDetectionResult> TryResolveAsync(PageIdentity page, CancellationToken cancellationToken); }
-public interface IMediaDetectionCoordinator { event EventHandler<MediaDetectionSnapshot>? StateChanged; MediaDetectionSnapshot Snapshot { get; } long BeginNavigation(Uri uri); Task ObserveAsync(PlayUrlObservation observation, CancellationToken cancellationToken = default); Task DetectAsync(CancellationToken cancellationToken = default); void Reset(); }
+public interface IMediaDetectionCoordinator
+{
+    event EventHandler<MediaDetectionSnapshot>? StateChanged;
+    MediaDetectionSnapshot Snapshot { get; }
+    long BeginNavigation(Uri uri);
+    long UpdatePageContext(PageIdentity page);
+    bool TryAcceptResult(long generation, MediaDetectionResult result);
+    Task ObserveAsync(PlayUrlObservation observation, CancellationToken cancellationToken = default);
+    Task DetectAsync(CancellationToken cancellationToken = default);
+    void Reset();
+}
 public sealed record MediaDetectionResult(bool Success, MediaDetectionState State, MediaFingerprint? Fingerprint, object? Media, string? ErrorCode = null);
 public sealed record MediaDetectionSnapshot(MediaDetectionState State, PageIdentity? Page, MediaFingerprint? Fingerprint, object? Media, string? ErrorCode, IReadOnlyList<DetectionDiagnostic> Diagnostics);
 
