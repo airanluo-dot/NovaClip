@@ -8,6 +8,8 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
 {
     private const int CurrentSchemaVersion = 3;
     private const int DefaultPageSize = 200;
+    private readonly string _databasePath;
+    private readonly string _backupPath;
     private readonly string _connectionString;
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private bool _disposed;
@@ -15,11 +17,13 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
     public SqliteDownloadTaskRepository(string databasePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
-        var directory = Path.GetDirectoryName(databasePath);
+        _databasePath = Path.GetFullPath(databasePath);
+        _backupPath = _databasePath + ".bak";
+        var directory = Path.GetDirectoryName(_databasePath);
         if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
         _connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = databasePath,
+            DataSource = _databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
             Pooling = false
@@ -27,6 +31,33 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        var backupCreated = TryCreateBackup();
+        try
+        {
+            await InitializeSchemaAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception firstFailure)
+        {
+            if (!backupCreated || !TryRestoreBackup()) throw;
+            try
+            {
+                await InitializeSchemaAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception retryFailure)
+            {
+                throw new InvalidDataException(
+                    "The NovaClip database could not be initialized or recovered from its backup.",
+                    new AggregateException(firstFailure, retryFailure));
+            }
+        }
+    }
+
+    private async Task InitializeSchemaAsync(CancellationToken cancellationToken = default)
     {
         await ExecuteWriteAsync(async token =>
         {
@@ -112,6 +143,38 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
 
             await transaction.CommitAsync(token).ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private bool TryCreateBackup()
+    {
+        try
+        {
+            if (!File.Exists(_databasePath)) return false;
+            var temporary = _backupPath + ".tmp";
+            File.Copy(_databasePath, temporary, overwrite: true);
+            File.Move(temporary, _backupPath, overwrite: true);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            System.Diagnostics.Debug.WriteLine($"NovaClip database backup could not be refreshed: {exception.Message}");
+            return false;
+        }
+    }
+
+    private bool TryRestoreBackup()
+    {
+        try
+        {
+            if (!File.Exists(_backupPath)) return false;
+            File.Copy(_backupPath, _databasePath, overwrite: true);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            System.Diagnostics.Debug.WriteLine($"NovaClip database backup could not be restored: {exception.Message}");
+            return false;
+        }
     }
 
     public Task UpsertAsync(DownloadTaskSnapshot snapshot, CancellationToken cancellationToken = default) =>
