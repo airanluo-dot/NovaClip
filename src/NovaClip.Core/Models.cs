@@ -252,6 +252,10 @@ public sealed record AppUpdateInfo(
         IsSafeAssetName(a.Name) &&
         a.Name.Equals("novaclip-update-manifest.json", StringComparison.OrdinalIgnoreCase));
 
+    public AppUpdateAsset? SignedManifestSignatureAsset => Assets.FirstOrDefault(a =>
+        IsSafeAssetName(a.Name) &&
+        a.Name.Equals("novaclip-update-manifest.sig", StringComparison.OrdinalIgnoreCase));
+
     private static bool IsSafeAssetName(string name) =>
         !string.IsNullOrWhiteSpace(name) &&
         name.IndexOfAny(['/', '\\', '\0']) < 0 &&
