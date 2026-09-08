@@ -82,7 +82,8 @@ internal sealed class PortableUpdateTransaction
             BackupRoot = backupRoot,
             State = "Preparing",
             Touched = touched,
-            Existing = existing
+            Existing = existing,
+            BackedUp = []
         };
         var transaction = new PortableUpdateTransaction(source, target, stateRoot, backupRoot, journalPath, journal, manifest);
         WriteJournal(journalPath, journal);
@@ -120,16 +121,23 @@ internal sealed class PortableUpdateTransaction
     {
         try
         {
+            var existing = _journal.Existing.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var backedUp = _journal.BackedUp.ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var relative in _journal.Touched)
             {
-                if (!IsSafeRelativePath(relative) || IsUserDataPath(relative)) continue;
+                if (!IsSafeRelativePath(relative) || IsUserDataPath(relative) || existing.Contains(relative)) continue;
                 var path = ResolveSafe(_target, relative);
-                if (File.Exists(path)) File.Delete(path);
+                if (Directory.Exists(path)) throw new InvalidDataException("The update path became a directory during rollback.");
+                if (File.Exists(path))
+                {
+                    if (HasReparsePoint(path)) throw new InvalidDataException("The update path became a reparse point during rollback.");
+                    File.Delete(path);
+                }
             }
 
-            foreach (var relative in _journal.Existing)
+            foreach (var relative in backedUp)
             {
-                if (!IsSafeRelativePath(relative)) continue;
+                if (!IsSafeRelativePath(relative) || IsUserDataPath(relative)) continue;
                 var backup = ResolveSafe(_backupRoot, relative);
                 var destination = ResolveSafe(_target, relative);
                 if (!File.Exists(backup)) continue;
@@ -150,8 +158,11 @@ internal sealed class PortableUpdateTransaction
         {
             var source = ResolveSafe(_target, relative);
             var backup = ResolveSafe(_backupRoot, relative);
+            if (!File.Exists(source) || HasReparsePoint(source)) throw new InvalidDataException("The target installation contains an unsafe file.");
             EnsureDirectoryFor(_backupRoot, relative);
             File.Copy(source, backup, overwrite: false);
+            _journal.BackedUp = _journal.BackedUp.Append(relative).ToArray();
+            WriteJournal(_journalPath, _journal);
         }
     }
 
@@ -173,6 +184,10 @@ internal sealed class PortableUpdateTransaction
         {
             if (IsUserDataPath(relative)) continue;
             var stale = ResolveSafe(_target, relative);
+            if (Directory.Exists(stale) || (File.Exists(stale) && HasReparsePoint(stale)))
+            {
+                throw new InvalidDataException("The stale update path is an unsafe file or directory.");
+            }
             if (File.Exists(stale)) File.Delete(stale);
         }
     }
@@ -196,6 +211,7 @@ internal sealed class PortableUpdateTransaction
                 if (journal is null ||
                     journal.Touched is null ||
                     journal.Existing is null ||
+                    journal.BackedUp is null ||
                     !string.Equals(Path.GetFullPath(journal.Target), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase) ||
                     !IsWithin(expectedStateRoot, journal.BackupRoot))
                 {
@@ -277,6 +293,11 @@ internal sealed class PortableUpdateTransaction
 
     private static void CopyAtomically(string source, string destination)
     {
+        if (Directory.Exists(destination) || (File.Exists(destination) && HasReparsePoint(destination)))
+        {
+            throw new InvalidDataException("The update destination is an unsafe file or directory.");
+        }
+
         var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".update";
         try
         {
@@ -416,7 +437,8 @@ internal sealed class PortableUpdateTransaction
             foreach (var file in Files)
             {
                 if (file is null ||
-                    IsUserDataPath(file.Path) ||
+                    string.IsNullOrWhiteSpace(file.Path) ||
+                    IsUserDataPath(file.Path!) ||
                     string.Equals(file.Path, ManifestName, StringComparison.OrdinalIgnoreCase) ||
                     !IsSafeRelativePath(file.Path) ||
                     !seen.Add(file.Path) ||
@@ -447,5 +469,6 @@ internal sealed class PortableUpdateTransaction
         public string State { get; set; } = string.Empty;
         public string[] Touched { get; set; } = [];
         public string[] Existing { get; set; } = [];
+        public string[] BackedUp { get; set; } = [];
     }
 }
