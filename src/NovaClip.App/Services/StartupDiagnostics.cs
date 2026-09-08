@@ -9,6 +9,8 @@ internal static class StartupDiagnostics
     private const long MaxLogFileBytes = 1_000_000;
     private const int RetainedLogFiles = 3;
     private const int MaxEntryCharacters = 32_000;
+    private const int MaxMessageCharacters = 8_000;
+    private const int MaxExceptionCharacters = 20_000;
 
     private static readonly object Gate = new();
     private static readonly Regex SecretPattern = new(
@@ -49,12 +51,16 @@ internal static class StartupDiagnostics
             var entry = new LogEntry(
                 DateTimeOffset.UtcNow,
                 level,
-                Redact(message),
-                exception is null ? null : Redact(exception.ToString()));
+                Truncate(Redact(message), MaxMessageCharacters),
+                exception is null ? null : Truncate(Redact(exception.ToString()), MaxExceptionCharacters));
             var serialized = JsonSerializer.Serialize(entry);
             if (serialized.Length > MaxEntryCharacters)
             {
-                serialized = serialized[..MaxEntryCharacters] + "\"}";
+                serialized = JsonSerializer.Serialize(entry with
+                {
+                    Message = Truncate(entry.Message, 4_000),
+                    Exception = entry.Exception is null ? null : Truncate(entry.Exception, 4_000)
+                });
             }
 
             var path = LogPath;
@@ -86,10 +92,11 @@ internal static class StartupDiagnostics
         redacted = UrlQueryPattern.Replace(
             redacted,
             match => match.Groups["base"].Value + "?[REDACTED]");
-        return redacted.Length <= MaxEntryCharacters
-            ? redacted
-            : redacted[..MaxEntryCharacters] + "…";
+        return redacted;
     }
+
+    private static string Truncate(string value, int maximumCharacters) =>
+        value.Length <= maximumCharacters ? value : value[..maximumCharacters] + "…";
 
     private static void Roll(string path)
     {
