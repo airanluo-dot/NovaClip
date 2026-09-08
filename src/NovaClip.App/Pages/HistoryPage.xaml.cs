@@ -45,7 +45,8 @@ public sealed partial class HistoryPage : Page
 
     private void HistoryScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        if (_hasMore && !_loading && e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - 240 &&
+        if (sender is not ScrollViewer scrollViewer) return;
+        if (_hasMore && !_loading && scrollViewer.VerticalOffset >= scrollViewer.ExtentHeight - scrollViewer.ViewportHeight - 240 &&
             (_loadTask is null || _loadTask.IsCompleted))
         {
             _loadTask = LoadNextPageFromUiAsync();
