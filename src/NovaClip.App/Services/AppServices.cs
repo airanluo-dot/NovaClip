@@ -124,6 +124,7 @@ public static class AppServices
         try
         {
             Interlocked.Exchange(ref _shutdownRequested, 1);
+            try { UpdateCoordinator?.Stop(); } catch (Exception exception) { StartupDiagnostics.Warning("Update check cancellation failed.", exception); }
             if (Downloads is not null)
             {
                 try { await Downloads.ShutdownAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); }
