@@ -22,6 +22,23 @@ public enum DownloadTaskState
     Cancelled
 }
 
+public enum DurableOperationState
+{
+    Preparing,
+    Downloading,
+    Finalizing,
+    Committed,
+    CleanupPending,
+    Failed
+}
+
+public enum DurableObligationKind
+{
+    HistoryWrite,
+    TemporaryCleanup,
+    UpdateRecovery
+}
+
 public enum ResolverStrategy
 {
     PageData,
@@ -149,7 +166,28 @@ public sealed record DownloadTaskSnapshot
     public string? ErrorMessage { get; init; }
     public long DownloadedBytes { get; init; }
     public long? TotalBytes { get; init; }
+    public long RunId { get; init; }
 }
+
+public sealed record DownloadPage(
+    IReadOnlyList<DownloadTaskSnapshot> Items,
+    DateTimeOffset? NextUpdatedAt,
+    Guid? NextId,
+    bool HasMore);
+
+public sealed record DurableObligation(
+    Guid Id,
+    DurableObligationKind Kind,
+    string Payload,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    int Attempts,
+    string? LastError);
+
+public sealed record OutputReservation(
+    Guid TaskId,
+    string OutputPath,
+    string MarkerPath);
 
 public sealed record RetryPolicy(
     int MaxAttempts = 3,
@@ -201,6 +239,20 @@ public sealed record AppUpdateInfo(
     string? ReleaseNotes,
     IReadOnlyList<AppUpdateAsset> Assets)
 {
-    public AppUpdateAsset? SetupAsset => Assets.FirstOrDefault(a => a.Name.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase));
-    public AppUpdateAsset? PortableAsset => Assets.FirstOrDefault(a => a.Name.EndsWith("-portable.zip", StringComparison.OrdinalIgnoreCase));
+    public AppUpdateAsset? SetupAsset => Assets.FirstOrDefault(a =>
+        IsSafeAssetName(a.Name) &&
+        a.Name.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase));
+
+    public AppUpdateAsset? PortableAsset => Assets.FirstOrDefault(a =>
+        IsSafeAssetName(a.Name) &&
+        a.Name.EndsWith("-portable.zip", StringComparison.OrdinalIgnoreCase));
+
+    public AppUpdateAsset? SignedManifestAsset => Assets.FirstOrDefault(a =>
+        IsSafeAssetName(a.Name) &&
+        a.Name.Equals("novaclip-update-manifest.json", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsSafeAssetName(string name) =>
+        !string.IsNullOrWhiteSpace(name) &&
+        name.IndexOfAny(['/', '\\', '\0']) < 0 &&
+        Path.GetFileName(name) == name;
 }

@@ -16,39 +16,26 @@ public sealed class FileNameSanitizer : IFileNameSanitizer
     public string Sanitize(string value, string fallback = "video")
     {
         var candidate = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
-        var builder = new StringBuilder(Math.Min(candidate.Length, 512));
-        foreach (var character in candidate.Take(512))
+        var builder = new StringBuilder(candidate.Length);
+        foreach (var character in candidate)
         {
             builder.Append(InvalidCharacters.Contains(character) || char.IsControl(character) ? '_' : character);
         }
 
         candidate = builder.ToString().Trim().TrimEnd('.', ' ');
         if (candidate.Length == 0) candidate = fallback;
-        if (ReservedNames.Contains(Path.GetFileNameWithoutExtension(candidate))) candidate = $"_{candidate}";
-        if (candidate.Length > 180)
-        {
-            candidate = candidate[..180];
-            if (candidate.Length > 0 && char.IsHighSurrogate(candidate[^1])) candidate = candidate[..^1];
-            candidate = candidate.TrimEnd('.', ' ');
-        }
-        return candidate.Length == 0 ? fallback : candidate;
+        if (ReservedNames.Contains(Path.GetFileNameWithoutExtension(candidate))) candidate = "_" + candidate;
+        return candidate.Length > 180 ? candidate[..180].TrimEnd('.', ' ') : candidate;
     }
 
     public string GetAvailablePath(string directory, string fileName)
     {
-        if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathRooted(directory)) throw new ArgumentException("The output directory must be absolute.", nameof(directory));
-        if (string.IsNullOrWhiteSpace(fileName) || fileName is "." or ".." || fileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(fileName) != fileName) throw new ArgumentException("The file name must be a single safe file name.", nameof(fileName));
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        if (!Path.IsPathRooted(directory) || Path.GetFileName(fileName) != fileName) throw new ArgumentException("A rooted directory and a single file name are required.");
         Directory.CreateDirectory(directory);
-        var baseName = Path.GetFileNameWithoutExtension(fileName);
-        var extension = Path.GetExtension(fileName);
-        var candidate = Path.Combine(directory, fileName);
-        var index = 1;
-        while (File.Exists(candidate))
-        {
-            if (index > 10_000) throw new IOException("Could not find an available output file name.");
-            candidate = Path.Combine(directory, $"{baseName} ({index++}){extension}");
-        }
-
-        return candidate;
+        // This method is retained for compatibility only. It deliberately does not
+        // claim a path is free; callers must use IOutputReservationService.
+        return Path.Combine(directory, fileName);
     }
 }
