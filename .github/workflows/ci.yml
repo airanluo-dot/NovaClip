@@ -20,6 +20,12 @@ jobs:
       - name: Dependency policy
         shell: pwsh
         run: ./scripts/check-dependencies.ps1
+      - name: NuGet vulnerability audit
+        run: |
+          dotnet list tests/NovaClip.Core.Tests/NovaClip.Core.Tests.csproj package --vulnerable --include-transitive
+          dotnet list tests/NovaClip.Infrastructure.Tests/NovaClip.Infrastructure.Tests.csproj package --vulnerable --include-transitive
+          dotnet list tests/NovaClip.Bilibili.Tests/NovaClip.Bilibili.Tests.csproj package --vulnerable --include-transitive
+          dotnet list tests/NovaClip.Updater.Tests/NovaClip.Updater.Tests.csproj package --vulnerable --include-transitive
       - name: Restore
         run: |
           dotnet restore tests/NovaClip.Core.Tests/NovaClip.Core.Tests.csproj
