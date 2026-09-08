@@ -2,6 +2,7 @@ namespace NovaClip.App;
 
 internal static class SignedUpdateTrustPolicy
 {
+    public const string KeyId = "novaclip-beta7-2026";
     // The corresponding private key is never stored in the repository. Release signing must use a protected CI secret.
     public const string PublicKeyPem = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1k8Ll2CwX8sWPASf9dx6
