@@ -21,11 +21,12 @@ public sealed record WindowsSettingsSnapshot(
     bool AutoCheckUpdates,
     UpdateChannel UpdateChannel,
     string UpdateFeedRepository,
-    string Theme);
+    string Theme,
+    string? LastBrowserUrl = null);
 
 public sealed class WindowsSettingsStore
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
     private const int MaxSettingsBytes = 1_000_000;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly object _saveGate = new();
@@ -50,6 +51,7 @@ public sealed class WindowsSettingsStore
     public UpdateChannel UpdateChannel { get; set; } = UpdateChannel.Preview;
     public string UpdateFeedRepository { get; set; } = "airanluo-dot/NovaClip";
     public string Theme { get; set; } = "System";
+    public string? LastBrowserUrl { get; set; }
     public static string? GitHubToken => Environment.GetEnvironmentVariable("NOVACLIP_GITHUB_TOKEN");
 
     public async Task LoadAsync()
@@ -79,6 +81,7 @@ public sealed class WindowsSettingsStore
             if (Enum.IsDefined(document.UpdateChannel)) UpdateChannel = document.UpdateChannel;
             if (!string.IsNullOrWhiteSpace(document.UpdateFeedRepository)) UpdateFeedRepository = document.UpdateFeedRepository;
             if (document.Theme is "System" or "Light" or "Dark") Theme = document.Theme;
+            LastBrowserUrl = IsUsableBrowserUrl(document.LastBrowserUrl) ? document.LastBrowserUrl : null;
             Validate();
             StartupDiagnostics.Configure(DebugLogging);
         }
@@ -105,7 +108,8 @@ public sealed class WindowsSettingsStore
             AutoCheckUpdates,
             UpdateChannel,
             UpdateFeedRepository,
-            Theme);
+            Theme,
+            LastBrowserUrl);
 
     public void Restore(WindowsSettingsSnapshot snapshot)
     {
@@ -126,6 +130,7 @@ public sealed class WindowsSettingsStore
         UpdateChannel = snapshot.UpdateChannel;
         UpdateFeedRepository = snapshot.UpdateFeedRepository;
         Theme = snapshot.Theme;
+        LastBrowserUrl = snapshot.LastBrowserUrl;
     }
 
     public void Validate()
@@ -141,6 +146,7 @@ public sealed class WindowsSettingsStore
         if (string.IsNullOrWhiteSpace(UpdateFeedRepository) || UpdateFeedRepository.Length > 200 || UpdateFeedRepository.Count(character => character == '/') != 1) throw new InvalidDataException("The update repository is invalid.");
         if (Theme is not ("System" or "Light" or "Dark")) throw new InvalidDataException("The theme is invalid.");
         if (FfmpegPath is not null && !IsUsableFfmpegPath(FfmpegPath)) throw new InvalidDataException("The FFmpeg path is invalid.");
+        if (LastBrowserUrl is not null && !IsUsableBrowserUrl(LastBrowserUrl)) throw new InvalidDataException("The last browser URL is invalid.");
     }
 
     public void Save()
@@ -169,7 +175,8 @@ public sealed class WindowsSettingsStore
                     BrowserStartup,
                     ExternalLinkBehavior,
                     DebugLogging,
-                    Theme);
+                    Theme,
+                    LastBrowserUrl);
                 var json = JsonSerializer.Serialize(document, JsonOptions);
                 var tempPath = _settingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
@@ -202,6 +209,19 @@ public sealed class WindowsSettingsStore
         string.Equals(Path.GetExtension(path), ".exe", StringComparison.OrdinalIgnoreCase) &&
         File.Exists(path);
 
+    private static bool IsUsableBrowserUrl(string? value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        uri.Scheme is "http" or "https" &&
+        IsBilibiliHost(uri.Host);
+
+    private static bool IsBilibiliHost(string host)
+    {
+        var normalized = host.TrimEnd('.');
+        return normalized.Equals("bilibili.com", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".bilibili.com", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("b23.tv", StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed record SettingsDocument(
         int SchemaVersion,
         string? DownloadDirectory,
@@ -219,5 +239,6 @@ public sealed class WindowsSettingsStore
         string? BrowserStartup = null,
         string? ExternalLinkBehavior = null,
         bool DebugLogging = false,
-        string? Theme = null);
+        string? Theme = null,
+        string? LastBrowserUrl = null);
 }
