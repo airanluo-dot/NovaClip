@@ -254,9 +254,35 @@ public sealed partial class BrowserPage : Page
     private void Core_NavigationCompleted(CoreWebView2 sender, CoreWebView2NavigationCompletedEventArgs args)
     {
         SetLoading(false);
-        if (!args.IsSuccess && args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+        if (args.IsSuccess)
+        {
+            PersistLastPage(sender.Source);
+        }
+        else if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
         {
             ShowError("BROWSER_NAVIGATION_FAILED", args.WebErrorStatus.ToString());
+        }
+    }
+
+    private void PersistLastPage(string? source)
+    {
+        if (!AppServices.IsInitialized ||
+            !Uri.TryCreate(source, UriKind.Absolute, out var uri) ||
+            !BrowserNavigationPolicy.IsBilibiliHost(uri.Host) ||
+            uri.Scheme is not ("http" or "https") ||
+            string.Equals(AppServices.Settings.LastBrowserUrl, source, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        try
+        {
+            AppServices.SettingsCoordinator.Apply(settings => settings.LastBrowserUrl = source);
+            StartupDiagnostics.Info("Browser.LastPagePersisted");
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Warning("Could not persist the last browser page.", exception);
         }
     }
 
