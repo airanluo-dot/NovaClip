@@ -225,9 +225,17 @@ public sealed class WindowsFfmpegService : IFfmpegService
     {
         if (string.IsNullOrWhiteSpace(outputPath) || !Path.IsPathRooted(outputPath)) return false;
         var fullPath = Path.GetFullPath(outputPath);
-        if (!Path.GetFileName(fullPath).EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return false;
-        var segments = fullPath.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
-        return segments.Any(segment => string.Equals(segment, StagingDirectoryName, StringComparison.OrdinalIgnoreCase));
+        if (!string.Equals(Path.GetFileName(fullPath), "final-output.tmp", StringComparison.OrdinalIgnoreCase)) return false;
+        var taskRoot = Path.GetDirectoryName(fullPath);
+        if (string.IsNullOrWhiteSpace(taskRoot) ||
+            !Guid.TryParseExact(Path.GetFileName(taskRoot), "N", out _))
+        {
+            return false;
+        }
+
+        var stagingDirectory = Path.GetDirectoryName(taskRoot);
+        return !string.IsNullOrWhiteSpace(stagingDirectory) &&
+            string.Equals(Path.GetFileName(stagingDirectory), StagingDirectoryName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void TryKill(Process process)
