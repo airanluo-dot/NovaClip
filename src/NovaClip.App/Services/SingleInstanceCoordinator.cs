@@ -62,7 +62,7 @@ public sealed class SingleInstanceCoordinator : IDisposable
             await writer.WriteLineAsync(payload).ConfigureAwait(false);
             return true;
         }
-        catch (TimeoutException or IOException or OperationCanceledException)
+        catch (Exception exception) when (exception is TimeoutException or IOException or OperationCanceledException)
         {
             return false;
         }
@@ -111,7 +111,7 @@ public sealed class SingleInstanceCoordinator : IDisposable
         try { _serverTask.Wait(1000); } catch { }
         _stopSource.Dispose();
         try { _mutex.ReleaseMutex(); }
-        catch (ApplicationException or ObjectDisposedException) { }
+        catch (Exception exception) when (exception is ApplicationException or ObjectDisposedException) { }
         _mutex.Dispose();
         GC.SuppressFinalize(this);
     }
