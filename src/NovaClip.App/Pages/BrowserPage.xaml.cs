@@ -28,6 +28,7 @@ public sealed partial class BrowserPage : Page
     private Task? _externalLaunchTask;
     private bool _webViewRecoveryRequested;
     private Task? _initializationTask;
+    private Uri? _pendingNavigationUri;
     private bool _isLoading;
 
     private static readonly object EnvironmentGate = new();
@@ -51,6 +52,18 @@ public sealed partial class BrowserPage : Page
     {
         AddressBox.Focus(FocusState.Keyboard);
         AddressBox.SelectAll();
+    }
+
+    public void NavigateAddress(string input)
+    {
+        if (!_urlResolver.TryResolve(input, out var uri))
+        {
+            ShowError("BROWSER_INVALID_ADDRESS", null);
+            FocusAddressBar();
+            return;
+        }
+
+        Navigate(uri);
     }
 
     public void Reload()
@@ -177,7 +190,14 @@ public sealed partial class BrowserPage : Page
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(bridge);
             }
 
-            Navigate(_home.HomeUri);
+            var initialUri = _pendingNavigationUri ?? (
+                string.Equals(AppServices.Settings.BrowserStartup, "LastPage", StringComparison.OrdinalIgnoreCase) &&
+                Uri.TryCreate(AppServices.Settings.LastBrowserUrl, UriKind.Absolute, out var lastUri) &&
+                _policy.Evaluate(lastUri, BrowserNavigationKind.User) == BrowserNavigationDecision.NavigateInCurrentView
+                    ? lastUri
+                    : _home.HomeUri);
+            _pendingNavigationUri = null;
+            Navigate(initialUri);
             StartupDiagnostics.Info("BrowserPage.Ready");
         }
         catch (Exception exception)
@@ -475,7 +495,22 @@ public sealed partial class BrowserPage : Page
         }
     }
 
-    private void Navigate(Uri uri) => BrowserWebView.CoreWebView2?.Navigate(uri.ToString());
+    private void Navigate(Uri uri)
+    {
+        if (BrowserWebView.CoreWebView2 is null)
+        {
+            _pendingNavigationUri = uri;
+            return;
+        }
+
+        if (_policy.Evaluate(uri, BrowserNavigationKind.AddressBar) != BrowserNavigationDecision.NavigateInCurrentView)
+        {
+            ShowError("BROWSER_NAVIGATION_BLOCKED", uri.Host);
+            return;
+        }
+
+        BrowserWebView.CoreWebView2.Navigate(uri.ToString());
+    }
     private void BackButton_Click(object sender, RoutedEventArgs e) => GoBack();
     private void ForwardButton_Click(object sender, RoutedEventArgs e) => GoForward();
     private void RefreshButton_Click(object sender, RoutedEventArgs e) => Reload();
