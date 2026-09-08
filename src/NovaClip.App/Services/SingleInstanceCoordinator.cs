@@ -55,7 +55,7 @@ public sealed class SingleInstanceCoordinator : IDisposable
         {
             if (ownsMutex)
             {
-                try { mutex.ReleaseMutex(); } catch (ApplicationException or ObjectDisposedException) { }
+                try { mutex.ReleaseMutex(); } catch (Exception exception) when (exception is ApplicationException or ObjectDisposedException) { }
             }
 
             mutex.Dispose();
