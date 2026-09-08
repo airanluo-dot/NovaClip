@@ -163,7 +163,7 @@ internal static class Program
 
         public int ProcessId { get; private init; }
         public string? SourceDirectory { get; private init; }
-        public string? TargetDirectory { get; private init; }
+        public string TargetDirectory { get; private init; } = string.Empty;
         public string? InstallerPath { get; private init; }
         public string RestartPath { get; private init; } = string.Empty;
         public bool Bootstrap { get; private init; }
