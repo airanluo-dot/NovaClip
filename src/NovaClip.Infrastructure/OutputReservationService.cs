@@ -36,7 +36,7 @@ public sealed class OutputReservationService : IOutputReservationService
             cancellationToken.ThrowIfCancellationRequested();
             var candidateName = index == 0 ? fileName : $"{baseName} ({index}){extension}";
             var outputPath = Path.Combine(directory, candidateName);
-            if (File.Exists(outputPath)) continue;
+            if (PathExists(outputPath)) continue;
 
             var markerPath = outputPath + MarkerSuffix;
             try
@@ -70,7 +70,7 @@ public sealed class OutputReservationService : IOutputReservationService
         {
             cancellationToken.ThrowIfCancellationRequested();
             EnsureOwnership(current);
-            if (File.Exists(current.OutputPath))
+            if (PathExists(current.OutputPath))
             {
                 await ReleaseAsync(current, cancellationToken).ConfigureAwait(false);
                 current = await ReserveAsync(current.TaskId, Path.GetDirectoryName(current.OutputPath)!, Path.GetFileName(current.OutputPath), cancellationToken).ConfigureAwait(false);
@@ -83,7 +83,7 @@ public sealed class OutputReservationService : IOutputReservationService
                 TryDeleteMarker(current.MarkerPath);
                 return current;
             }
-            catch (IOException) when (File.Exists(current.OutputPath))
+            catch (IOException) when (PathExists(current.OutputPath))
             {
                 await ReleaseAsync(current, cancellationToken).ConfigureAwait(false);
                 current = await ReserveAsync(current.TaskId, Path.GetDirectoryName(current.OutputPath)!, Path.GetFileName(current.OutputPath), cancellationToken).ConfigureAwait(false);
@@ -164,6 +164,8 @@ public sealed class OutputReservationService : IOutputReservationService
             return true;
         }
     }
+
+    private static bool PathExists(string path) => File.Exists(path) || Directory.Exists(path);
 
     private static void TryDeleteMarker(string path)
     {
