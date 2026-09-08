@@ -51,10 +51,10 @@ public interface IHistoryRepository
 
 public interface IDurableObligationStore
 {
-    Task EnqueueAsync(DurableObligationKind kind, string payload, string? error, CancellationToken cancellationToken = default);
+    Task EnqueueAsync(DurableObligationKind kind, string payload, string? errorMessage, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<DurableObligation>> GetPendingAsync(int limit, CancellationToken cancellationToken = default);
     Task CompleteAsync(Guid id, CancellationToken cancellationToken = default);
-    Task RecordFailureAsync(Guid id, string error, CancellationToken cancellationToken = default);
+    Task RecordFailureAsync(Guid id, string errorMessage, CancellationToken cancellationToken = default);
 }
 
 public interface IOutputReservationService : IDisposable
