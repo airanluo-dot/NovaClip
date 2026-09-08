@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 using NovaClip.Bilibili;
 using NovaClip.Contracts;
 using NovaClip.Core;
@@ -31,130 +30,13 @@ public sealed partial class BrowserPage : Page
     private Uri? _pendingNavigationUri;
     private bool _isLoading;
 
-    private static readonly object EnvironmentGate = new();
-    private static Task<CoreWebView2Environment>? SharedEnvironmentTask;
-
-    public static BrowserPage? Current { get; private set; }
-    public static BrowserPage? Instance { get; private set; }
-    public bool HasInitializedWebView => BrowserWebView.CoreWebView2 is not null;
-
-    public BrowserPage()
-    {
-        InitializeComponent();
-        Instance = this;
-        _detector.StateChanged += Detector_StateChanged;
-        NavigationCacheMode = Microsoft.UI.Xaml.Navigation.NavigationCacheMode.Required;
-        Loaded += BrowserPage_Loaded;
-        Unloaded += BrowserPage_Unloaded;
-    }
-
-    public void FocusAddressBar()
-    {
-        AddressBox.Focus(FocusState.Keyboard);
-        AddressBox.SelectAll();
-    }
-
-    public void NavigateAddress(string input)
-    {
-        if (!_urlResolver.TryResolve(input, out var uri))
-        {
-            ShowError("BROWSER_INVALID_ADDRESS", null);
-            FocusAddressBar();
-            return;
-        }
-
-        Navigate(uri);
-    }
-
-    public void Reload()
-    {
-        if (_isLoading) BrowserWebView.CoreWebView2?.Stop();
-        else BrowserWebView.CoreWebView2?.Reload();
-    }
-
-    public void GoBack()
-    {
-        if (BrowserWebView.CoreWebView2?.CanGoBack == true) BrowserWebView.CoreWebView2.GoBack();
-    }
-
-    public void GoForward()
-    {
-        if (BrowserWebView.CoreWebView2?.CanGoForward == true) BrowserWebView.CoreWebView2.GoForward();
-    }
-
-    private async void BrowserPage_Loaded(object sender, RoutedEventArgs e)
-    {
-        Current = this;
-        StartupDiagnostics.Info("BrowserPage.Loaded");
-        StartupDiagnostics.Info("BrowserPage.InitializeRequested");
-        _initializationTask ??= InitializeWebViewAsync();
-        try
-        {
-            await _initializationTask;
-        }
-        catch (Exception exception)
-        {
-            StartupDiagnostics.Error("WEBVIEW_INITIALIZATION_UNOBSERVED", exception);
-            ShowError("WEBVIEW_INITIALIZATION_FAILED", exception.Message);
-            _initializationTask = null;
-        }
-    }
-
-    private void BrowserPage_Unloaded(object sender, RoutedEventArgs e)
-    {
-        if (ReferenceEquals(Current, this)) Current = null;
-        if (ReferenceEquals(Instance, this)) Instance = null;
-    }
-
-    internal static async Task VerifyEnvironmentAsync()
-    {
-        _ = await GetEnvironmentAsync();
-        StartupDiagnostics.Info("WebView2.EnvironmentReady");
-        StartupDiagnostics.Info("WebView2.Ready");
-    }
-
-    private static async Task<CoreWebView2Environment> CreateEnvironmentAsync()
-    {
-        var profilePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "NovaClip",
-            "WebView2");
-        try
-        {
-            Directory.CreateDirectory(profilePath);
-            return await CoreWebView2Environment.CreateWithOptionsAsync(null, profilePath, null);
-        }
-        catch (Exception exception)
-        {
-            StartupDiagnostics.Warning("The primary WebView2 profile could not be created; trying a temporary profile.", exception);
-            var fallbackPath = Path.Combine(
-                Path.GetTempPath(),
-                "NovaClip",
-                "WebView2",
-                Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
-            Directory.CreateDirectory(fallbackPath);
-            return await CoreWebView2Environment.CreateWithOptionsAsync(null, fallbackPath, null);
-        }
-    }
-
-    private static Task<CoreWebView2Environment> GetEnvironmentAsync()
-    {
-        lock (EnvironmentGate) return SharedEnvironmentTask ??= CreateEnvironmentAsync();
-    }
-
-    private static void ResetEnvironmentIfFailed(Task<CoreWebView2Environment> failedTask)
-    {
-        lock (EnvironmentGate)
-        {
-            if (ReferenceEquals(SharedEnvironmentTask, failedTask)) SharedEnvironmentTask = null;
-        }
-    }
+    internal static Task VerifyEnvironmentAsync() => BrowserWebViewEnvironment.VerifyAsync();
 
     private async Task InitializeWebViewAsync()
     {
         try
         {
-            var environmentTask = GetEnvironmentAsync();
+            var environmentTask = BrowserWebViewEnvironment.GetAsync();
             CoreWebView2Environment environment;
             try
             {
@@ -162,7 +44,7 @@ public sealed partial class BrowserPage : Page
             }
             catch
             {
-                ResetEnvironmentIfFailed(environmentTask);
+                BrowserWebViewEnvironment.ResetIfFailed(environmentTask);
                 throw;
             }
 
@@ -490,7 +372,7 @@ public sealed partial class BrowserPage : Page
         {
             var title = AppServices.FileNames.Sanitize(media.Title, "Bilibili");
             var extension = video is null && audio is not null ? ".m4a" : ".mp4";
-            var requestHeaders = await CreateMediaRequestHeadersAsync(media.PageUrl);
+            var requestHeaders = await BrowserMediaRequestHeadersFactory.CreateAsync(BrowserWebView.CoreWebView2, media.PageUrl);
             await AppServices.Downloads.EnqueueAsync(new DownloadRequest(
                 Guid.NewGuid(),
                 media,
@@ -709,69 +591,6 @@ public sealed partial class BrowserPage : Page
             contextUri.Scheme.Equals(currentUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
             contextUri.Host.Equals(currentUri.Host, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(contextUri.AbsolutePath, currentUri.AbsolutePath, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private async Task<MediaRequestHeaders?> CreateMediaRequestHeadersAsync(string pageUrl)
-    {
-        if (!Uri.TryCreate(pageUrl, UriKind.Absolute, out var pageUri)) return null;
-
-        var core = BrowserWebView.CoreWebView2;
-        if (core is null)
-        {
-            return new MediaRequestHeaders(
-                Referer: pageUri.ToString(),
-                Origin: pageUri.GetLeftPart(UriPartial.Authority),
-                RefreshUrl: pageUri.ToString());
-        }
-
-        string? cookieHeader = null;
-        try
-        {
-            var cookies = await core.CookieManager.GetCookiesAsync(pageUri.ToString());
-            var builder = new StringBuilder();
-            foreach (var cookie in cookies)
-            {
-                if (string.IsNullOrWhiteSpace(cookie.Name) ||
-                    cookie.Name.IndexOfAny(['\r', '\n', ';', '=']) >= 0 ||
-                    cookie.Value.IndexOfAny(['\r', '\n', ';']) >= 0)
-                {
-                    continue;
-                }
-
-                var separatorLength = builder.Length == 0 ? 0 : 2;
-                if (builder.Length + separatorLength + cookie.Name.Length + 1 + cookie.Value.Length > MaxCookieHeaderCharacters)
-                {
-                    break;
-                }
-
-                if (builder.Length > 0) builder.Append("; ");
-                builder.Append(cookie.Name).Append('=').Append(cookie.Value);
-            }
-
-            cookieHeader = builder.Length == 0 ? null : builder.ToString();
-        }
-        catch (Exception exception)
-        {
-            StartupDiagnostics.Warning("Could not read WebView2 cookies for the media request.", exception);
-        }
-
-        string? userAgent = null;
-        try
-        {
-            var raw = await core.ExecuteScriptAsync("navigator.userAgent");
-            userAgent = JsonSerializer.Deserialize<string>(raw);
-        }
-        catch (Exception exception)
-        {
-            StartupDiagnostics.Warning("Could not read WebView2 user agent for the media request.", exception);
-        }
-
-        return new MediaRequestHeaders(
-            pageUri.ToString(),
-            pageUri.GetLeftPart(UriPartial.Authority),
-            userAgent,
-            cookieHeader,
-            pageUri.ToString());
     }
 
     private static async Task<string?> ReadBoundedTextAsync(Stream stream, int maxCharacters)
