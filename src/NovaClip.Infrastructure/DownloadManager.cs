@@ -4,287 +4,592 @@ using NovaClip.Core;
 
 namespace NovaClip.Infrastructure;
 
-public sealed class DownloadManager : IDownloadManager, IDisposable
+public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDisposable
 {
     private const int MaxManifestCharacters = 2_000_000;
     private readonly IDownloadEngine _engine;
     private readonly IFfmpegService? _ffmpeg;
     private readonly IDownloadTaskRepository? _repository;
     private readonly IHistoryRepository? _history;
+    private readonly IDurableObligationStore? _obligations;
+    private readonly IOutputReservationService _reservations;
+    private readonly bool _ownsReservations;
+    private readonly DownloadPersistenceQueue? _persistence;
     private readonly SemaphoreSlim _slots;
+    private readonly object _slotsGate = new();
     private readonly ConcurrentDictionary<Guid, DownloadWork> _work = new();
+    private int _maxConcurrentTasks;
+    private int _slotDeficit;
+    private int _accepting = 1;
+    private int _disposed;
 
     public DownloadManager(
         IDownloadEngine engine,
         IFfmpegService? ffmpeg = null,
         IDownloadTaskRepository? repository = null,
         IHistoryRepository? history = null,
-        int maxConcurrentTasks = 2)
+        int maxConcurrentTasks = 2,
+        IOutputReservationService? reservations = null,
+        IDurableObligationStore? obligations = null)
     {
-        _engine = engine;
+        _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _ffmpeg = ffmpeg;
         _repository = repository;
         _history = history;
-        _slots = new SemaphoreSlim(Math.Clamp(maxConcurrentTasks, 1, 3));
+        _obligations = obligations;
+        _reservations = reservations ?? new OutputReservationService();
+        _ownsReservations = reservations is null;
+        _persistence = repository is null ? null : new DownloadPersistenceQueue(repository);
+        _maxConcurrentTasks = Math.Clamp(maxConcurrentTasks, 1, 3);
+        _slots = new SemaphoreSlim(_maxConcurrentTasks, 3);
     }
 
     public event EventHandler<DownloadTaskSnapshot>? TaskChanged;
 
-    public Task<Guid> EnqueueAsync(DownloadRequest request, CancellationToken cancellationToken = default)
+    public bool IsAcceptingWork => Volatile.Read(ref _accepting) == 1;
+
+    public async Task<Guid> EnqueueAsync(DownloadRequest request, CancellationToken cancellationToken = default)
     {
         ValidateRequest(request);
+        if (!IsAcceptingWork) throw new InvalidOperationException("The application is shutting down and no new downloads are accepted.");
         cancellationToken.ThrowIfCancellationRequested();
-        var now = DateTimeOffset.UtcNow;
-        var snapshot = new DownloadTaskSnapshot
+
+        var reservation = await _reservations.ReserveAsync(request.TaskId, request.OutputDirectory, request.OutputFileName, cancellationToken).ConfigureAwait(false);
+        try
         {
-            Id = request.TaskId,
-            PageUrl = request.Media.PageUrl,
-            Title = request.Media.Title,
-            State = DownloadTaskState.Queued,
-            CreatedAt = now,
-            UpdatedAt = now,
-            OutputPath = Path.Combine(request.OutputDirectory, request.OutputFileName),
-            SelectedQualityId = request.VideoTrack?.QualityId,
-            SelectedCodec = request.VideoTrack?.Codec,
-            TotalBytes = GetTotalBytes(request)
-        };
-        var work = new DownloadWork(request, snapshot);
-        if (!_work.TryAdd(request.TaskId, work)) throw new InvalidOperationException("A task with this ID already exists.");
-        Publish(snapshot);
-        long runId;
-        lock (work.Gate) runId = ++work.RunId;
-        _ = RunAsync(work, runId, cancellationToken);
-        return Task.FromResult(request.TaskId);
+            var now = DateTimeOffset.UtcNow;
+            var snapshot = new DownloadTaskSnapshot
+            {
+                Id = request.TaskId,
+                PageUrl = request.Media.PageUrl,
+                Title = request.Media.Title,
+                State = DownloadTaskState.Queued,
+                CreatedAt = now,
+                UpdatedAt = now,
+                OutputPath = reservation.OutputPath,
+                SelectedQualityId = request.VideoTrack?.QualityId,
+                SelectedCodec = request.VideoTrack?.Codec,
+                TotalBytes = GetTotalBytes(request)
+            };
+            var work = new DownloadWork(request, snapshot, reservation);
+            if (!_work.TryAdd(request.TaskId, work)) throw new InvalidOperationException("A task with this ID already exists.");
+            Publish(snapshot);
+            await PersistCriticalAsync(snapshot).ConfigureAwait(false);
+            StartRun(work);
+            return request.TaskId;
+        }
+        catch
+        {
+            await _reservations.ReleaseAsync(reservation).ConfigureAwait(false);
+            throw;
+        }
     }
 
     public async Task PauseAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_work.TryGetValue(taskId, out var work))
+        if (!_work.TryGetValue(taskId, out var work)) return;
+
+        CancellationTokenSource? stopSource;
+        Task? runTask;
+        lock (work.Gate)
         {
-            CancellationTokenSource stopSource;
-            lock (work.Gate)
-            {
-                if (work.Snapshot.State is DownloadTaskState.Completed or DownloadTaskState.Cancelled or DownloadTaskState.Paused or DownloadTaskState.Failed) return;
-                work.PauseRequested = true;
-                stopSource = work.StopSource;
-            }
-            await stopSource.CancelAsync().ConfigureAwait(false);
+            if (work.Snapshot.State is DownloadTaskState.Completed or DownloadTaskState.Cancelled or DownloadTaskState.Paused or DownloadTaskState.Failed) return;
+            work.PauseRequested = true;
+            stopSource = work.CurrentRun?.StopSource;
+            runTask = work.RunTask;
         }
+
+        if (stopSource is not null) await stopSource.CancelAsync().ConfigureAwait(false);
+        if (runTask is not null) await ObserveTaskAsync(runTask).ConfigureAwait(false);
     }
 
-    public Task ResumeAsync(Guid taskId, CancellationToken cancellationToken = default)
+    public async Task ResumeAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_work.TryGetValue(taskId, out var work))
+        if (!_work.TryGetValue(taskId, out var work)) return;
+
+        Task? previousRun;
+        lock (work.Gate)
         {
-            long runId;
-            lock (work.Gate)
-            {
-                if (work.Snapshot.State is not (DownloadTaskState.Paused or DownloadTaskState.Failed)) return Task.CompletedTask;
-                work.PauseRequested = false;
-                work.CancelRequested = false;
-                // The previous source may still be observed by a finishing RunAsync. Keep it alive until Dispose.
-                work.StopSource = new CancellationTokenSource();
-                work.Snapshot = work.Snapshot with { State = DownloadTaskState.Resolving, ErrorCode = null, ErrorMessage = null, UpdatedAt = DateTimeOffset.UtcNow };
-                Publish(work.Snapshot);
-                runId = ++work.RunId;
-            }
-            _ = RunAsync(work, runId, cancellationToken);
+            if (work.Snapshot.State is not (DownloadTaskState.Paused or DownloadTaskState.Failed)) return;
+            previousRun = work.RunTask;
         }
-        return Task.CompletedTask;
+
+        if (previousRun is not null) await ObserveTaskAsync(previousRun).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (work.Gate)
+        {
+            if (work.Snapshot.State is not (DownloadTaskState.Paused or DownloadTaskState.Failed)) return;
+            work.PauseRequested = false;
+            work.CancelRequested = false;
+        }
+
+        StartRun(work);
     }
 
     public async Task CancelAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_work.TryGetValue(taskId, out var work))
+        if (!_work.TryGetValue(taskId, out var work)) return;
+
+        CancellationTokenSource? stopSource;
+        Task? runTask;
+        DownloadTaskSnapshot? cancelled = null;
+        lock (work.Gate)
         {
-            CancellationTokenSource stopSource;
-            DownloadTaskSnapshot? cancelledSnapshot = null;
-            lock (work.Gate)
+            if (work.Snapshot.State is DownloadTaskState.Completed or DownloadTaskState.Cancelled) return;
+            work.CancelRequested = true;
+            work.PauseRequested = false;
+            if (work.Snapshot.State is DownloadTaskState.Paused or DownloadTaskState.Failed)
             {
-                if (work.Snapshot.State is DownloadTaskState.Completed or DownloadTaskState.Cancelled) return;
-                work.CancelRequested = true;
-                if (work.Snapshot.State is DownloadTaskState.Paused or DownloadTaskState.Failed)
-                {
-                    work.Snapshot = work.Snapshot with { State = DownloadTaskState.Cancelled, UpdatedAt = DateTimeOffset.UtcNow };
-                    cancelledSnapshot = work.Snapshot;
-                    stopSource = null!;
-                }
-                else
-                {
-                    stopSource = work.StopSource;
-                }
+                work.Snapshot = work.Snapshot with { State = DownloadTaskState.Cancelled, UpdatedAt = DateTimeOffset.UtcNow };
+                cancelled = work.Snapshot;
+                stopSource = null;
+                runTask = null;
             }
-            if (cancelledSnapshot is not null) Publish(cancelledSnapshot);
-            else await stopSource.CancelAsync().ConfigureAwait(false);
+            else
+            {
+                stopSource = work.CurrentRun?.StopSource;
+                runTask = work.RunTask;
+            }
         }
+
+        if (cancelled is not null)
+        {
+            Publish(cancelled);
+            await PersistCriticalAsync(cancelled).ConfigureAwait(false);
+            await CleanupCancelledAsync(work).ConfigureAwait(false);
+            return;
+        }
+
+        if (stopSource is not null) await stopSource.CancelAsync().ConfigureAwait(false);
+        if (runTask is not null) await ObserveTaskAsync(runTask).ConfigureAwait(false);
     }
 
-    public IReadOnlyList<DownloadTaskSnapshot> GetTasks() => _work.Values.Select(work => work.GetSnapshot()).OrderByDescending(snapshot => snapshot.UpdatedAt).ToArray();
+    public IReadOnlyList<DownloadTaskSnapshot> GetTasks() =>
+        _work.Values.Select(work => work.GetSnapshot()).OrderByDescending(snapshot => snapshot.UpdatedAt).ToArray();
+
+    public void SetMaxConcurrentTasks(int maxConcurrentTasks)
+    {
+        var requested = Math.Clamp(maxConcurrentTasks, 1, 3);
+        lock (_slotsGate)
+        {
+            var current = _maxConcurrentTasks;
+            if (requested == current) return;
+            _maxConcurrentTasks = requested;
+            if (requested > current)
+            {
+                var increase = requested - current;
+                var absorbed = Math.Min(increase, _slotDeficit);
+                _slotDeficit -= absorbed;
+                if (increase > absorbed) _slots.Release(increase - absorbed);
+            }
+            else
+            {
+                var decrease = current - requested;
+                for (var index = 0; index < decrease; index++)
+                {
+                    if (!_slots.Wait(0)) _slotDeficit++;
+                }
+            }
+        }
+    }
 
     public async Task RestoreAsync(CancellationToken cancellationToken = default)
     {
-        if (_repository is null) return;
+        if (_repository is null || !IsAcceptingWork) return;
+        await ReplayObligationsAsync(cancellationToken).ConfigureAwait(false);
         var snapshots = await _repository.GetAllAsync(cancellationToken).ConfigureAwait(false);
         foreach (var snapshot in snapshots.Where(item => item.State is not (DownloadTaskState.Completed or DownloadTaskState.Cancelled)))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (_work.ContainsKey(snapshot.Id)) continue;
             var request = await TryRestoreRequestAsync(snapshot, cancellationToken).ConfigureAwait(false);
             if (request is null) continue;
-            var shouldResume = snapshot.State is not (DownloadTaskState.Paused or DownloadTaskState.Failed);
-            var queued = shouldResume
-                ? snapshot with { State = DownloadTaskState.Queued, UpdatedAt = DateTimeOffset.UtcNow, ErrorCode = null, ErrorMessage = null }
-                : snapshot;
-            var work = new DownloadWork(request, queued);
-            if (_work.TryAdd(snapshot.Id, work))
-            {
-                Publish(queued);
-                if (shouldResume)
-                {
-                    long runId;
-                    lock (work.Gate) runId = ++work.RunId;
-                    _ = RunAsync(work, runId, CancellationToken.None);
-                }
-            }
-        }
-    }
 
-    public void Dispose()
-    {
-        foreach (var work in _work.Values)
-        {
-            lock (work.Gate) work.StopSource.Dispose();
-        }
-        _slots.Dispose();
-    }
-
-    private async Task RunAsync(DownloadWork work, long runId, CancellationToken externalCancellationToken)
-    {
-        CancellationToken stopToken;
-        lock (work.Gate)
-        {
-            if (work.RunId != runId) return;
-            stopToken = work.StopSource.Token;
-        }
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(stopToken, externalCancellationToken);
-        var token = linked.Token;
-        try
-        {
-            await _slots.WaitAsync(token).ConfigureAwait(false);
+            var fileName = Path.GetFileName(snapshot.OutputPath);
+            var directory = Path.GetDirectoryName(snapshot.OutputPath);
+            if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(fileName)) continue;
+            OutputReservation reservation;
             try
             {
-                if (!SetState(work, DownloadTaskState.Resolving, runId)) return;
-                var progress = new Progress<DownloadProgress>(value =>
-                {
-                    DownloadTaskSnapshot snapshot;
-                    lock (work.Gate)
-                    {
-                        if (work.RunId != runId) return;
-                        work.Snapshot = work.Snapshot with
-                        {
-                            DownloadedBytes = value.DownloadedBytes,
-                            TotalBytes = value.TotalBytes ?? work.Snapshot.TotalBytes,
-                            UpdatedAt = DateTimeOffset.UtcNow
-                        };
-                        snapshot = work.Snapshot;
-                    }
-                    Publish(snapshot);
-                });
-                if (!SetState(work, work.Request.Media.LegacySegments.Count > 0 && work.Request.VideoTrack is null && work.Request.AudioTrack is null
-                    ? DownloadTaskState.DownloadingSegments
-                    : work.Request.VideoTrack is not null ? DownloadTaskState.DownloadingVideo : DownloadTaskState.DownloadingAudio, runId)) return;
-                await _engine.DownloadAsync(work.Request, progress, token).ConfigureAwait(false);
-                if (work.Request.MergeAfterDownload && work.Request.VideoTrack is not null && work.Request.AudioTrack is not null)
-                {
-                    if (_ffmpeg is null) throw new InvalidOperationException("FFmpeg service is not configured.");
-                    if (!SetState(work, DownloadTaskState.Merging, runId)) return;
-                    var root = Path.Combine(work.Request.OutputDirectory, ".bilinative", work.Request.TaskId.ToString("N"));
-                    var result = await _ffmpeg.MergeAsync(Path.Combine(root, "video.m4s.part"), Path.Combine(root, "audio.m4s.part"), work.GetSnapshot().OutputPath, null, token).ConfigureAwait(false);
-                    if (!result.Success) throw new InvalidOperationException(result.ErrorMessage ?? "FFmpeg merge failed.");
-                }
-
-                if (!work.Request.Media.LegacySegments.Any() && work.Request.VideoTrack is not null && work.Request.AudioTrack is not null && !work.Request.MergeAfterDownload)
-                {
-                    await FinalizeUnmergedTracksAsync(work, token).ConfigureAwait(false);
-                }
-                else if (!work.Request.Media.LegacySegments.Any() && !(work.Request.VideoTrack is not null && work.Request.AudioTrack is not null && work.Request.MergeAfterDownload))
-                {
-                    await FinalizeSingleTrackAsync(work, token).ConfigureAwait(false);
-                }
-
-                if (!SetState(work, DownloadTaskState.Finalizing, runId)) return;
-                if (work.Request.DeleteTemporaryFilesAfterMerge && Directory.Exists(Path.Combine(work.Request.OutputDirectory, ".bilinative", work.Request.TaskId.ToString("N"))))
-                {
-                    Directory.Delete(Path.Combine(work.Request.OutputDirectory, ".bilinative", work.Request.TaskId.ToString("N")), true);
-                }
-                if (!SetState(work, DownloadTaskState.Completed, runId)) return;
-                if (_history is not null)
-                {
-                    try
-                    {
-                        await _history.AddAsync(work.GetSnapshot(), CancellationToken.None).ConfigureAwait(false);
-                    }
-                    catch (Exception exception)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"NovaClip history persistence failed: {exception}");
-                    }
-                }
+                reservation = await _reservations.ReserveAsync(snapshot.Id, directory, fileName, cancellationToken).ConfigureAwait(false);
             }
-            finally
+            catch (IOException)
             {
-                _slots.Release();
+                continue;
             }
+
+            var shouldResume = snapshot.State is not (DownloadTaskState.Paused or DownloadTaskState.Failed);
+            var restored = snapshot with
+            {
+                State = shouldResume ? DownloadTaskState.Queued : snapshot.State,
+                OutputPath = reservation.OutputPath,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                ErrorCode = shouldResume ? null : snapshot.ErrorCode,
+                ErrorMessage = shouldResume ? null : snapshot.ErrorMessage
+            };
+            var work = new DownloadWork(request, restored, reservation);
+            if (!_work.TryAdd(snapshot.Id, work))
+            {
+                await _reservations.ReleaseAsync(reservation).ConfigureAwait(false);
+                continue;
+            }
+
+            Publish(restored);
+            await PersistCriticalAsync(restored).ConfigureAwait(false);
+            if (shouldResume) StartRun(work);
         }
-        catch (OperationCanceledException) when (work.IsPauseRequested)
-        {
-            TrySetState(work, DownloadTaskState.Paused, runId);
-        }
-        catch (OperationCanceledException)
-        {
-            TrySetState(work, DownloadTaskState.Cancelled, runId);
-        }
-        catch (Exception exception)
+    }
+
+    public async Task ShutdownAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        Interlocked.Exchange(ref _accepting, 0);
+
+        var runs = new List<(CancellationTokenSource Source, Task Task)>();
+        foreach (var work in _work.Values)
         {
             lock (work.Gate)
             {
-                if (work.RunId != runId) return;
-                work.Snapshot = work.Snapshot with { ErrorCode = "DOWNLOAD_FAILED", ErrorMessage = exception.Message };
+                if (work.Snapshot.State is DownloadTaskState.Completed or DownloadTaskState.Cancelled or DownloadTaskState.Paused or DownloadTaskState.Failed) continue;
+                if (work.CurrentRun is { } run && work.RunTask is { } task)
+                {
+                    work.PauseRequested = true;
+                    runs.Add((run.StopSource, task));
+                }
             }
-            TrySetState(work, DownloadTaskState.Failed, runId);
+        }
+
+        foreach (var run in runs) await run.Source.CancelAsync().ConfigureAwait(false);
+        var allRuns = Task.WhenAll(runs.Select(item => ObserveTaskAsync(item.Task)));
+        await allRuns.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        if (_persistence is not null) await _persistence.DrainAsync(timeout, cancellationToken).ConfigureAwait(false);
+    }
+
+    private void StartRun(DownloadWork work)
+    {
+        lock (work.Gate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (work.CurrentRun is not null && !work.CurrentRun.Task.IsCompleted) return;
+            var runId = ++work.RunId;
+            var run = new DownloadRun(runId);
+            work.Snapshot = work.Snapshot with { RunId = runId, UpdatedAt = DateTimeOffset.UtcNow };
+            work.CurrentRun = run;
+            run.Task = RunAsync(work, run);
+            work.RunTask = run.Task;
         }
     }
 
-    private bool SetState(DownloadWork work, DownloadTaskState state, long? expectedRunId = null)
+    private async Task RunAsync(DownloadWork work, DownloadRun run)
+    {
+        var slotAcquired = false;
+        try
+        {
+            await _slots.WaitAsync(run.StopSource.Token).ConfigureAwait(false);
+            slotAcquired = true;
+            if (!await SetStateAsync(work, DownloadTaskState.Resolving, run.RunId).ConfigureAwait(false)) return;
+
+            var progress = new Progress<DownloadProgress>(value =>
+            {
+                DownloadTaskSnapshot? snapshot = null;
+                lock (work.Gate)
+                {
+                    if (work.CurrentRun?.RunId != run.RunId) return;
+                    work.Snapshot = work.Snapshot with
+                    {
+                        DownloadedBytes = Math.Max(0, value.DownloadedBytes),
+                        TotalBytes = value.TotalBytes ?? work.Snapshot.TotalBytes,
+                        UpdatedAt = DateTimeOffset.UtcNow
+                    };
+                    snapshot = work.Snapshot;
+                }
+                Publish(snapshot);
+            });
+
+            var downloadState = work.Request.Media.LegacySegments.Count > 0 && work.Request.VideoTrack is null && work.Request.AudioTrack is null
+                ? DownloadTaskState.DownloadingSegments
+                : work.Request.VideoTrack is not null
+                    ? DownloadTaskState.DownloadingVideo
+                    : DownloadTaskState.DownloadingAudio;
+            if (!await SetStateAsync(work, downloadState, run.RunId).ConfigureAwait(false)) return;
+
+            await _engine.DownloadAsync(work.Request, progress, run.StopSource.Token).ConfigureAwait(false);
+            var taskRoot = HttpRangeDownloader.GetTaskRoot(work.Request.OutputDirectory, work.Request.TaskId);
+
+            if (work.Request.MergeAfterDownload && work.Request.VideoTrack is not null && work.Request.AudioTrack is not null)
+            {
+                if (_ffmpeg is null) throw new InvalidOperationException("FFmpeg service is not configured.");
+                if (!await SetStateAsync(work, DownloadTaskState.Merging, run.RunId).ConfigureAwait(false)) return;
+                var staging = Path.Combine(taskRoot, "final-output.tmp");
+                TryDeleteFile(staging);
+                var result = await _ffmpeg.MergeAsync(
+                    Path.Combine(taskRoot, "video.m4s.part"),
+                    Path.Combine(taskRoot, "audio.m4s.part"),
+                    staging,
+                    null,
+                    run.StopSource.Token).ConfigureAwait(false);
+                if (!result.Success) throw new InvalidOperationException(result.ErrorMessage ?? "FFmpeg merge failed.");
+                ValidateStagingFile(staging);
+                await CommitPrimaryAsync(work, staging, run.StopSource.Token).ConfigureAwait(false);
+            }
+            else if (work.Request.Media.LegacySegments.Count > 0)
+            {
+                var staging = Path.Combine(taskRoot, "legacy.mp4.part");
+                ValidateStagingFile(staging);
+                await CommitPrimaryAsync(work, staging, run.StopSource.Token).ConfigureAwait(false);
+            }
+            else if (work.Request.VideoTrack is not null && work.Request.AudioTrack is not null && !work.Request.MergeAfterDownload)
+            {
+                var videoStaging = Path.Combine(taskRoot, "video.m4s.part");
+                var audioStaging = Path.Combine(taskRoot, "audio.m4s.part");
+                ValidateStagingFile(videoStaging);
+                ValidateStagingFile(audioStaging);
+                await CommitPrimaryAsync(work, videoStaging, run.StopSource.Token).ConfigureAwait(false);
+                var audioName = Path.GetFileNameWithoutExtension(work.GetSnapshot().OutputPath) + "-audio.m4a";
+                var audioReservation = await _reservations.ReserveAsync(work.Request.TaskId, work.Request.OutputDirectory, audioName, run.StopSource.Token).ConfigureAwait(false);
+                var committedAudio = await _reservations.CommitAsync(audioReservation, audioStaging, run.StopSource.Token).ConfigureAwait(false);
+                StartupDiagnosticsAdapter.Info($"Task {work.Request.TaskId:D} committed secondary audio {committedAudio.OutputPath}.");
+            }
+            else
+            {
+                var track = work.Request.VideoTrack ?? work.Request.AudioTrack;
+                if (track is null) throw new InvalidOperationException("The download request has no finalizable track.");
+                var partName = track.Type == TrackType.Video ? "video.m4s.part" : "audio.m4s.part";
+                var staging = Path.Combine(taskRoot, partName);
+                ValidateStagingFile(staging);
+                if (track.Type == TrackType.Audio && string.Equals(Path.GetExtension(work.GetSnapshot().OutputPath), ".mp4", StringComparison.OrdinalIgnoreCase))
+                {
+                    var newPath = Path.ChangeExtension(work.GetSnapshot().OutputPath, ".m4a");
+                    lock (work.Gate) work.Snapshot = work.Snapshot with { OutputPath = newPath, UpdatedAt = DateTimeOffset.UtcNow };
+                }
+                await CommitPrimaryAsync(work, staging, run.StopSource.Token).ConfigureAwait(false);
+            }
+
+            if (!await SetStateAsync(work, DownloadTaskState.Finalizing, run.RunId).ConfigureAwait(false)) return;
+            if (work.Request.DeleteTemporaryFilesAfterMerge)
+            {
+                await CleanupTaskRootAsync(work, DurableObligationKind.TemporaryCleanup).ConfigureAwait(false);
+            }
+
+            if (!await SetStateAsync(work, DownloadTaskState.Completed, run.RunId).ConfigureAwait(false)) return;
+            if (_history is not null)
+            {
+                var completed = work.GetSnapshot();
+                try
+                {
+                    await _history.AddAsync(completed, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    await EnqueueObligationAsync(DurableObligationKind.HistoryWrite, JsonSerializer.Serialize(completed), exception.Message).ConfigureAwait(false);
+                    StartupDiagnosticsAdapter.Warning("History write deferred until the next startup.", exception);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (work.IsCancelRequested)
+        {
+            await CompleteCancellationAsync(work, run.RunId).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (work.IsPauseRequested)
+        {
+            await SetStateIfCurrentAsync(work, DownloadTaskState.Paused, run.RunId).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            await CompleteCancellationAsync(work, run.RunId).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            DownloadTaskSnapshot? failed = null;
+            lock (work.Gate)
+            {
+                if (work.CurrentRun?.RunId == run.RunId)
+                {
+                    work.Snapshot = work.Snapshot with
+                    {
+                        ErrorCode = "DOWNLOAD_FAILED",
+                        ErrorMessage = exception.Message,
+                        UpdatedAt = DateTimeOffset.UtcNow
+                    };
+                    failed = work.Snapshot;
+                }
+            }
+            if (failed is not null)
+            {
+                await SetStateIfCurrentAsync(work, DownloadTaskState.Failed, run.RunId).ConfigureAwait(false);
+                StartupDiagnosticsAdapter.Error($"Download {work.Request.TaskId:D} failed.", exception);
+            }
+        }
+        finally
+        {
+            if (slotAcquired) ReleaseSlot();
+            lock (work.Gate)
+            {
+                if (work.CurrentRun?.RunId == run.RunId) work.CurrentRun = null;
+            }
+            run.StopSource.Dispose();
+        }
+    }
+
+    private async Task CommitPrimaryAsync(DownloadWork work, string stagingPath, CancellationToken cancellationToken)
+    {
+        ValidateStagingFile(stagingPath);
+        OutputReservation reservation;
+        lock (work.Gate) reservation = work.Reservation;
+        var committed = await _reservations.CommitAsync(reservation, stagingPath, cancellationToken).ConfigureAwait(false);
+        DownloadTaskSnapshot snapshot;
+        lock (work.Gate)
+        {
+            work.Reservation = committed;
+            work.Snapshot = work.Snapshot with { OutputPath = committed.OutputPath, UpdatedAt = DateTimeOffset.UtcNow };
+            snapshot = work.Snapshot;
+        }
+        Publish(snapshot);
+        await PersistCriticalAsync(snapshot).ConfigureAwait(false);
+    }
+
+    private async Task CompleteCancellationAsync(DownloadWork work, long runId)
+    {
+        if (!await SetStateIfCurrentAsync(work, DownloadTaskState.Cancelled, runId).ConfigureAwait(false)) return;
+        await CleanupCancelledAsync(work).ConfigureAwait(false);
+    }
+
+    private async Task<bool> SetStateIfCurrentAsync(DownloadWork work, DownloadTaskState state, long runId)
+    {
+        try { return await SetStateAsync(work, state, runId).ConfigureAwait(false); }
+        catch (Exception exception)
+        {
+            StartupDiagnosticsAdapter.Error($"Task {work.Request.TaskId:D} state transition failed.", exception);
+            return false;
+        }
+    }
+
+    private async Task<bool> SetStateAsync(DownloadWork work, DownloadTaskState state, long? expectedRunId = null)
     {
         DownloadTaskSnapshot snapshot;
         lock (work.Gate)
         {
-            if (expectedRunId is long runId && work.RunId != runId) return false;
+            if (expectedRunId is long runId && work.CurrentRun?.RunId != runId) return false;
             var current = work.Snapshot.State;
             if (!DownloadTaskStateMachine.CanTransition(current, state))
             {
                 if (current == state) return true;
                 throw new InvalidOperationException($"Cannot transition task {work.Snapshot.Id} from {current} to {state}.");
             }
+
             work.Snapshot = work.Snapshot with { State = state, UpdatedAt = DateTimeOffset.UtcNow };
             snapshot = work.Snapshot;
         }
         Publish(snapshot);
+        await PersistCriticalAsync(snapshot).ConfigureAwait(false);
         return true;
     }
 
-    private void TrySetState(DownloadWork work, DownloadTaskState state, long runId)
+    private void Publish(DownloadTaskSnapshot snapshot)
     {
+        _persistence?.EnqueueProgress(snapshot);
+        try { TaskChanged?.Invoke(this, snapshot); }
+        catch (Exception exception) { StartupDiagnosticsAdapter.Warning("Download task notification failed.", exception); }
+    }
+
+    private async Task PersistCriticalAsync(DownloadTaskSnapshot snapshot)
+    {
+        if (_persistence is not null) await _persistence.EnqueueCriticalAsync(snapshot, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task CleanupCancelledAsync(DownloadWork work)
+    {
+        await _reservations.ReleaseAsync(work.Reservation).ConfigureAwait(false);
+        await CleanupTaskRootAsync(work, DurableObligationKind.TemporaryCleanup).ConfigureAwait(false);
+    }
+
+    private async Task CleanupTaskRootAsync(DownloadWork work, DurableObligationKind kind)
+    {
+        var root = HttpRangeDownloader.GetTaskRoot(work.Request.OutputDirectory, work.Request.TaskId);
+        if (!IsSafeTaskRoot(root)) return;
         try
         {
-            SetState(work, state, runId);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            System.Diagnostics.Debug.WriteLine($"NovaClip task state update failed: {exception}");
+            await EnqueueObligationAsync(kind, root, exception.Message).ConfigureAwait(false);
         }
+    }
+
+    private async Task ReplayObligationsAsync(CancellationToken cancellationToken)
+    {
+        if (_obligations is null || _history is null) return;
+        var pending = await _obligations.GetPendingAsync(100, cancellationToken).ConfigureAwait(false);
+        foreach (var obligation in pending)
+        {
+            try
+            {
+                switch (obligation.Kind)
+                {
+                    case DurableObligationKind.HistoryWrite:
+                        var snapshot = JsonSerializer.Deserialize<DownloadTaskSnapshot>(obligation.Payload);
+                        if (snapshot is null) throw new InvalidDataException("Deferred history payload was invalid.");
+                        await _history.AddAsync(snapshot, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case DurableObligationKind.TemporaryCleanup:
+                        if (!IsSafeTaskRoot(obligation.Payload)) throw new InvalidDataException("Deferred cleanup path was outside a task root.");
+                        if (Directory.Exists(obligation.Payload)) Directory.Delete(obligation.Payload, true);
+                        break;
+                    default:
+                        throw new InvalidDataException("Unsupported deferred obligation kind.");
+                }
+
+                await _obligations.CompleteAsync(obligation.Id, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                await _obligations.RecordFailureAsync(obligation.Id, exception.Message, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task EnqueueObligationAsync(DurableObligationKind kind, string payload, string? error)
+    {
+        if (_obligations is null) return;
+        try { await _obligations.EnqueueAsync(kind, payload, error, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception exception) { StartupDiagnosticsAdapter.Error("Could not record durable obligation.", exception); }
+    }
+
+    private void ReleaseSlot()
+    {
+        lock (_slotsGate)
+        {
+            if (_slotDeficit > 0) _slotDeficit--;
+            else _slots.Release();
+        }
+    }
+
+    private static async Task ObserveTaskAsync(Task task)
+    {
+        try { await task.ConfigureAwait(false); } catch { }
+    }
+
+    private static void ValidateStagingFile(string path)
+    {
+        if (!File.Exists(path)) throw new FileNotFoundException("The staging output does not exist.", path);
+        if (new FileInfo(path).Length <= 0) throw new InvalidDataException("The staging output is empty.");
+    }
+
+    private static bool IsSafeTaskRoot(string path)
+    {
+        if (!Path.IsPathRooted(path)) return false;
+        var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return full.Contains($"{Path.DirectorySeparatorChar}.novaclip{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch (IOException) { }
     }
 
     private static long? GetTotalBytes(DownloadRequest request)
@@ -301,56 +606,25 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
         return total > 0 ? total : null;
     }
 
-    private static async Task FinalizeSingleTrackAsync(DownloadWork work, CancellationToken cancellationToken)
-    {
-        var track = work.Request.VideoTrack ?? work.Request.AudioTrack;
-        if (track is null) return;
-        var root = Path.Combine(work.Request.OutputDirectory, ".bilinative", work.Request.TaskId.ToString("N"));
-        var partName = track.Type == TrackType.Video ? "video.m4s.part" : "audio.m4s.part";
-        var sourcePath = Path.Combine(root, partName);
-        if (!File.Exists(sourcePath)) return;
-        Directory.CreateDirectory(work.Request.OutputDirectory);
-        var outputPath = work.GetSnapshot().OutputPath;
-        if (track.Type == TrackType.Audio && string.Equals(Path.GetExtension(outputPath), ".mp4", StringComparison.OrdinalIgnoreCase))
-        {
-            outputPath = Path.ChangeExtension(outputPath, ".m4a");
-            lock (work.Gate) work.Snapshot = work.Snapshot with { OutputPath = outputPath, UpdatedAt = DateTimeOffset.UtcNow };
-        }
-        await Task.Run(() => File.Move(sourcePath, outputPath, true), cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task FinalizeUnmergedTracksAsync(DownloadWork work, CancellationToken cancellationToken)
-    {
-        var root = Path.Combine(work.Request.OutputDirectory, ".bilinative", work.Request.TaskId.ToString("N"));
-        var snapshot = work.GetSnapshot();
-        if (work.Request.VideoTrack is not null)
-        {
-            var videoPath = Path.Combine(root, "video.m4s.part");
-            if (File.Exists(videoPath)) await Task.Run(() => File.Move(videoPath, snapshot.OutputPath, true), cancellationToken).ConfigureAwait(false);
-        }
-        if (work.Request.AudioTrack is not null)
-        {
-            var audioPath = Path.Combine(root, "audio.m4s.part");
-            var outputName = Path.GetFileNameWithoutExtension(snapshot.OutputPath) + "-audio.m4a";
-            var outputPath = Path.Combine(work.Request.OutputDirectory, outputName);
-            if (File.Exists(audioPath)) await Task.Run(() => File.Move(audioPath, outputPath, true), cancellationToken).ConfigureAwait(false);
-        }
-    }
-
     private static async Task<DownloadRequest?> TryRestoreRequestAsync(DownloadTaskSnapshot snapshot, CancellationToken cancellationToken)
     {
-        if (!Path.IsPathRooted(snapshot.OutputPath)) return null;
         var outputDirectory = Path.GetDirectoryName(snapshot.OutputPath);
-        if (string.IsNullOrWhiteSpace(outputDirectory)) return null;
-        var manifestPath = Path.Combine(outputDirectory, ".bilinative", snapshot.Id.ToString("N"), "task.json");
-        if (!File.Exists(manifestPath)) return null;
+        if (string.IsNullOrWhiteSpace(outputDirectory) || !Path.IsPathRooted(snapshot.OutputPath)) return null;
+        var taskRoot = HttpRangeDownloader.GetTaskRoot(outputDirectory, snapshot.Id);
+        var manifestPath = Path.Combine(taskRoot, "task.json");
+        if (!File.Exists(manifestPath))
+        {
+            var legacyRoot = Path.Combine(outputDirectory, ".bilinative", snapshot.Id.ToString("N"));
+            manifestPath = Path.Combine(legacyRoot, "task.json");
+        }
+
         try
         {
-            if (new FileInfo(manifestPath).Length > MaxManifestCharacters * sizeof(char)) return null;
+            if (!File.Exists(manifestPath) || new FileInfo(manifestPath).Length > MaxManifestCharacters * sizeof(char)) return null;
             var json = await File.ReadAllTextAsync(manifestPath, cancellationToken).ConfigureAwait(false);
             if (json.Length > MaxManifestCharacters) return null;
             var manifest = JsonSerializer.Deserialize<DownloadManifest>(json, ManifestJsonOptions);
-            if (manifest is null || manifest.Tracks is null || manifest.Tracks.Count == 0) return null;
+            if (manifest?.Tracks is null || manifest.Tracks.Count == 0) return null;
 
             var tracks = manifest.Tracks
                 .Where(item => item is not null && !string.IsNullOrWhiteSpace(item.Type) && !string.IsNullOrWhiteSpace(item.TrackId) && Enum.TryParse<TrackType>(item.Type, true, out _) && item.Urls is not null)
@@ -411,27 +685,125 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
             ValidateRequest(request);
             return request;
         }
-        catch (JsonException)
+        catch (Exception exception) when (exception is JsonException or IOException or ArgumentException or NullReferenceException)
         {
-            return null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (ArgumentException)
-        {
-            return null;
-        }
-        catch (NullReferenceException)
-        {
+            StartupDiagnosticsAdapter.Warning("A persisted download task could not be restored.", exception);
             return null;
         }
     }
 
     private static readonly JsonSerializerOptions ManifestJsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    private static bool IsHttpUrl(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 16_384 && Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is ("http" or "https") && !string.IsNullOrWhiteSpace(uri.Host) && string.IsNullOrEmpty(uri.UserInfo);
+    private static bool IsHttpUrl(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= 16_384 &&
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        uri.Scheme is "http" or "https" &&
+        !string.IsNullOrWhiteSpace(uri.Host) &&
+        string.IsNullOrEmpty(uri.UserInfo);
+
+    private static void ValidateRequest(DownloadRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.TaskId == Guid.Empty) throw new ArgumentException("The download task ID cannot be empty.", nameof(request));
+        ArgumentNullException.ThrowIfNull(request.Media);
+        ArgumentNullException.ThrowIfNull(request.Media.LegacySegments);
+        if (string.IsNullOrWhiteSpace(request.OutputDirectory) || !Path.IsPathRooted(request.OutputDirectory)) throw new ArgumentException("The output directory must be absolute.", nameof(request.OutputDirectory));
+        if (string.IsNullOrWhiteSpace(request.OutputFileName) || request.OutputFileName is "." or ".." || request.OutputFileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(request.OutputFileName) != request.OutputFileName) throw new ArgumentException("The output file name must be a single safe file name.", nameof(request.OutputFileName));
+        if (request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count == 0) throw new ArgumentException("The download request has no media tracks.", nameof(request));
+        ValidateTrack(request.VideoTrack, TrackType.Video);
+        ValidateTrack(request.AudioTrack, TrackType.Audio);
+        if (request.VideoTrack is not null && request.AudioTrack is not null && string.Equals(request.VideoTrack.TrackId, request.AudioTrack.TrackId, StringComparison.Ordinal)) throw new ArgumentException("The media track IDs must be unique.", nameof(request));
+        var segmentIds = new HashSet<int>();
+        foreach (var segment in request.Media.LegacySegments)
+        {
+            if (segment is null || segment.Index < 0 || !segmentIds.Add(segment.Index) || segment.Size is < 0 || segment.Urls is null || segment.Urls.Count == 0 || segment.Urls.Any(candidate => candidate is null || !IsHttpUrl(candidate.Url))) throw new ArgumentException("The download request contains an invalid media segment.", nameof(request));
+        }
+    }
+
+    private static void ValidateTrack(MediaTrack? track, TrackType expectedType)
+    {
+        if (track is null) return;
+        if (track.Type != expectedType || string.IsNullOrWhiteSpace(track.TrackId) || track.Size is < 0 || track.DurationSeconds is < 0 || track.Urls is null || track.Urls.Count == 0 || track.Urls.Any(candidate => candidate is null || !IsHttpUrl(candidate.Url))) throw new ArgumentException("The download request contains an invalid media track.", nameof(track));
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        foreach (var work in _work.Values)
+        {
+            lock (work.Gate) work.CurrentRun?.StopSource.Cancel();
+        }
+
+        _slots.Dispose();
+        if (_ownsReservations) _reservations.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Volatile.Read(ref _disposed) == 0)
+        {
+            try { await ShutdownAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); } catch { }
+            Dispose();
+        }
+
+        if (_persistence is not null) await _persistence.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private sealed class DownloadWork
+    {
+        public DownloadWork(DownloadRequest request, DownloadTaskSnapshot snapshot, OutputReservation reservation)
+        {
+            Request = request;
+            Snapshot = snapshot;
+            Reservation = reservation;
+        }
+
+        public DownloadRequest Request { get; }
+        public object Gate { get; } = new();
+        public DownloadTaskSnapshot Snapshot { get; set; }
+        public OutputReservation Reservation { get; set; }
+        public DownloadRun? CurrentRun { get; set; }
+        public Task? RunTask { get; set; }
+        public long RunId { get; set; }
+        public bool PauseRequested { get; set; }
+        public bool CancelRequested { get; set; }
+
+        public bool IsPauseRequested
+        {
+            get { lock (Gate) return PauseRequested && !CancelRequested; }
+        }
+
+        public bool IsCancelRequested
+        {
+            get { lock (Gate) return CancelRequested; }
+        }
+
+        public DownloadTaskSnapshot GetSnapshot()
+        {
+            lock (Gate) return Snapshot;
+        }
+    }
+
+    private sealed class DownloadRun
+    {
+        public DownloadRun(long runId)
+        {
+            RunId = runId;
+        }
+
+        public long RunId { get; }
+        public CancellationTokenSource StopSource { get; } = new();
+        public Task Task { get; set; } = Task.CompletedTask;
+    }
+
+    private static class StartupDiagnosticsAdapter
+    {
+        public static void Info(string message) => System.Diagnostics.Debug.WriteLine(message);
+        public static void Warning(string message, Exception exception) => System.Diagnostics.Debug.WriteLine($"{message} {exception}");
+        public static void Error(string message, Exception exception) => System.Diagnostics.Debug.WriteLine($"{message} {exception}");
+    }
 
     private sealed class DownloadManifest
     {
@@ -459,80 +831,5 @@ public sealed class DownloadManager : IDownloadManager, IDisposable
         public long? Size { get; set; }
         public int? SegmentIndex { get; set; }
         public List<string>? Urls { get; set; }
-    }
-
-    private void Publish(DownloadTaskSnapshot snapshot)
-    {
-        if (_repository is not null) _ = PersistAsync(snapshot);
-        try
-        {
-            TaskChanged?.Invoke(this, snapshot);
-        }
-        catch (Exception exception)
-        {
-            System.Diagnostics.Debug.WriteLine($"NovaClip task notification failed: {exception}");
-        }
-    }
-
-    private async Task PersistAsync(DownloadTaskSnapshot snapshot)
-    {
-        try
-        {
-            await _repository!.UpsertAsync(snapshot).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            System.Diagnostics.Debug.WriteLine($"NovaClip persistence failed: {exception}");
-        }
-    }
-
-    private static void ValidateRequest(DownloadRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (request.TaskId == Guid.Empty) throw new ArgumentException("The download task ID cannot be empty.", nameof(request));
-        ArgumentNullException.ThrowIfNull(request.Media);
-        ArgumentNullException.ThrowIfNull(request.Media.LegacySegments);
-        if (string.IsNullOrWhiteSpace(request.OutputDirectory) || !Path.IsPathRooted(request.OutputDirectory)) throw new ArgumentException("The output directory must be an absolute path.", nameof(request));
-        if (string.IsNullOrWhiteSpace(request.OutputFileName) || request.OutputFileName is "." or ".." || request.OutputFileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(request.OutputFileName) != request.OutputFileName) throw new ArgumentException("The output file name must be a single safe file name.", nameof(request));
-        if (request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count == 0) throw new ArgumentException("The download request has no media tracks.", nameof(request));
-        ValidateTrack(request.VideoTrack, TrackType.Video);
-        ValidateTrack(request.AudioTrack, TrackType.Audio);
-        if (request.VideoTrack is not null && request.AudioTrack is not null && string.Equals(request.VideoTrack.TrackId, request.AudioTrack.TrackId, StringComparison.Ordinal)) throw new ArgumentException("The media track IDs must be unique.", nameof(request));
-        var segmentIds = new HashSet<int>();
-        foreach (var segment in request.Media.LegacySegments)
-        {
-            if (segment is null || segment.Index < 0 || !segmentIds.Add(segment.Index) || segment.Size is < 0 || segment.Urls is null || segment.Urls.Count == 0 || segment.Urls.Any(candidate => candidate is null || !IsHttpUrl(candidate.Url))) throw new ArgumentException("The download request contains an invalid media segment.", nameof(request));
-        }
-    }
-
-    private static void ValidateTrack(MediaTrack? track, TrackType expectedType)
-    {
-        if (track is null) return;
-        if (track.Type != expectedType || string.IsNullOrWhiteSpace(track.TrackId) || track.Size is < 0 || track.DurationSeconds is < 0 || track.Urls is null || track.Urls.Count == 0 || track.Urls.Any(candidate => candidate is null || !IsHttpUrl(candidate.Url))) throw new ArgumentException("The download request contains an invalid media track.", nameof(track));
-    }
-
-    private sealed class DownloadWork
-    {
-        public DownloadWork(DownloadRequest request, DownloadTaskSnapshot snapshot)
-        {
-            Request = request;
-            Snapshot = snapshot;
-        }
-
-        public DownloadRequest Request { get; }
-        public object Gate { get; } = new();
-        public DownloadTaskSnapshot Snapshot { get; set; }
-        public CancellationTokenSource StopSource { get; set; } = new();
-        public long RunId { get; set; }
-        public bool PauseRequested { get; set; }
-        public bool CancelRequested { get; set; }
-        public bool IsPauseRequested
-        {
-            get { lock (Gate) return PauseRequested; }
-        }
-        public DownloadTaskSnapshot GetSnapshot()
-        {
-            lock (Gate) return Snapshot;
-        }
     }
 }
