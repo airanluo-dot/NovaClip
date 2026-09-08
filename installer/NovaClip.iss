@@ -6,8 +6,8 @@
 #endif
 
 #define ProductName "NovaClip"
-#define ProductVersion "1.0.0.6"
-#define DisplayVersion "1.0.0-beta.6"
+#define ProductVersion "1.0.0.7"
+#define DisplayVersion "1.0.0-beta.7"
 #define ProductPublisher "Aren Vox"
 #define ProductExe "NovaClip.exe"
 
@@ -26,7 +26,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
 OutputDir={#OutputDir}
-OutputBaseFilename=NovaClip-1.0.0-beta.6-win-x64-setup
+OutputBaseFilename=NovaClip-1.0.0-beta.7-win-x64-setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -40,7 +40,7 @@ VersionInfoDescription=NovaClip Bilibili native Windows download manager
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "portable.marker"
+Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "portable.marker;novaclip-package-manifest.json"
 
 [Icons]
 Name: "{autoprograms}\NovaClip"; Filename: "{app}\{#ProductExe}"

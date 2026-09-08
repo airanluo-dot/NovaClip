@@ -7,36 +7,31 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier>$(NovaClipRuntimeIdentifier)</RuntimeIdentifier>
     <WindowsPackageType>None</WindowsPackageType>
     <EnableMsixTooling>false</EnableMsixTooling>
     <UseWinUI>true</UseWinUI>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <PublishSingleFile>false</PublishSingleFile>
     <PublishReadyToRun>false</PublishReadyToRun>
-    <AssemblyVersion>1.0.0.6</AssemblyVersion>
-    <FileVersion>1.0.0.6</FileVersion>
-    <InformationalVersion>1.0.0-beta.6</InformationalVersion>
-    <ApplicationIcon>..\..\assets\icons\NovaClip.ico</ApplicationIcon>
+    <AssemblyVersion>$(NovaClipAssemblyVersion)</AssemblyVersion>
+    <FileVersion>$(NovaClipAssemblyVersion)</FileVersion>
+    <InformationalVersion>$(NovaClipVersion)</InformationalVersion>
+    <ApplicationIcon>....assetsiconsNovaClip.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NovaClip.Contracts\NovaClip.Contracts.csproj" />
-    <ProjectReference Include="..\NovaClip.Core\NovaClip.Core.csproj" />
-    <ProjectReference Include="..\NovaClip.Infrastructure\NovaClip.Infrastructure.csproj" />
-    <ProjectReference Include="..\NovaClip.Bilibili\NovaClip.Bilibili.csproj" />
-    <ProjectReference Include="..\NovaClip.Windows\NovaClip.Windows.csproj" />
+    <ProjectReference Include="..NovaClip.ContractsNovaClip.Contracts.csproj" />
+    <ProjectReference Include="..NovaClip.CoreNovaClip.Core.csproj" />
+    <ProjectReference Include="..NovaClip.InfrastructureNovaClip.Infrastructure.csproj" />
+    <ProjectReference Include="..NovaClip.BilibiliNovaClip.Bilibili.csproj" />
+    <ProjectReference Include="..NovaClip.WindowsNovaClip.Windows.csproj" />
     <PackageReference Include="Microsoft.WindowsAppSDK" />
     <PackageReference Include="Microsoft.Web.WebView2" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" PrivateAssets="all" />
-    <Content Include="..\..\assets\js\bilibili-bridge.js" Link="assets\js\bilibili-bridge.js" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\assets\icons\NovaClip.png" Link="assets\icons\NovaClip.png" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\assets\icons\NovaClip.ico" Link="assets\icons\NovaClip.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="....assetsjsilibili-bridge.js" Link="assetsjsilibili-bridge.js" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="....assetsiconsNovaClip.png" Link="assetsiconsNovaClip.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="....assetsiconsNovaClip.ico" Link="assetsiconsNovaClip.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
-  <!--
-    dotnet publish does not automatically copy the compiled WinUI resource
-    index for this unpackaged app. At runtime XAML pages are resolved from
-    resources.pri next to NovaClip.exe, so copy NovaClip.pri explicitly.
-  -->
   <Target Name="CopyAppPriToPublish" AfterTargets="Publish">
     <Copy SourceFiles="$(TargetDir)$(TargetName).pri"
           DestinationFiles="$(PublishDir)resources.pri"

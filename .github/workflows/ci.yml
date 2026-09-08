@@ -2,7 +2,7 @@ name: Native rebuild checks
 
 on:
   push:
-    branches: [main, refactor/beta.4-native-rebuild]
+    branches: [main, refactor/beta.4-native-rebuild, codex/nova-clip-1.0.0-beta.7-remediation]
   pull_request:
   workflow_dispatch:
 
@@ -13,10 +13,13 @@ jobs:
   cross-platform:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: 10.0.x
+      - name: Dependency policy
+        shell: pwsh
+        run: ./scripts/check-dependencies.ps1
       - name: Restore
         run: |
           dotnet restore tests/NovaClip.Core.Tests/NovaClip.Core.Tests.csproj
@@ -28,19 +31,24 @@ jobs:
           dotnet build src/NovaClip.Core/NovaClip.Core.csproj -c Release
           dotnet build src/NovaClip.Bilibili/NovaClip.Bilibili.csproj -c Release
           dotnet build src/NovaClip.Infrastructure/NovaClip.Infrastructure.csproj -c Release
+          dotnet build src/NovaClip.Updater/NovaClip.Updater.csproj -c Release
       - name: Test
         run: |
           dotnet test tests/NovaClip.Core.Tests/NovaClip.Core.Tests.csproj -c Release
           dotnet test tests/NovaClip.Infrastructure.Tests/NovaClip.Infrastructure.Tests.csproj -c Release
           dotnet test tests/NovaClip.Bilibili.Tests/NovaClip.Bilibili.Tests.csproj -c Release
-
   static-gates:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Localization gate
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 10.0.x
+      - name: Dependency policy
         shell: pwsh
-        run: ./scripts/check-localization.ps1
-      - name: Architecture gate
+        run: ./scripts/check-dependencies.ps1
+      - name: Localization and architecture gates
         shell: pwsh
-        run: ./scripts/check-architecture.ps1
+        run: |
+          ./scripts/check-localization.ps1
+          ./scripts/check-architecture.ps1
