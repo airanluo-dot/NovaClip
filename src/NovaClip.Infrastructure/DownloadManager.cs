@@ -344,6 +344,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                     run.StopSource.Token).ConfigureAwait(false);
                 if (!result.Success) throw new InvalidOperationException(result.ErrorMessage ?? "FFmpeg merge failed.");
                 ValidateStagingFile(staging);
+                if (!await SetStateAsync(work, DownloadTaskState.Finalizing, run.RunId).ConfigureAwait(false)) return;
                 await CommitPrimaryAsync(work, staging, run.StopSource.Token).ConfigureAwait(false);
             }
             else if (work.Request.Media.LegacySegments.Count > 0)
@@ -386,19 +387,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
             if (work.GetSnapshot().State != DownloadTaskState.Completed &&
                 !await SetStateAsync(work, DownloadTaskState.Completed, run.RunId).ConfigureAwait(false)) return;
-            if (_history is not null)
-            {
-                var completed = work.GetSnapshot();
-                try
-                {
-                    await _history.AddAsync(completed, CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception exception)
-                {
-                    await EnqueueObligationAsync(DurableObligationKind.HistoryWrite, JsonSerializer.Serialize(completed), exception.Message).ConfigureAwait(false);
-                    StartupDiagnosticsAdapter.Warning("History write deferred until the next startup.", exception);
-                }
-            }
+            await RecordHistoryAsync(work).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (work.IsCancelRequested)
         {
@@ -414,21 +403,39 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         }
         catch (Exception exception)
         {
+            var committed = false;
             DownloadTaskSnapshot? failed = null;
             lock (work.Gate)
             {
                 if (work.CurrentRun?.RunId == run.RunId)
                 {
-                    work.Snapshot = work.Snapshot with
+                    committed = work.Snapshot.OperationState is DurableOperationState.Committed or DurableOperationState.CleanupPending;
+                    if (!committed)
                     {
-                        ErrorCode = "DOWNLOAD_FAILED",
-                        ErrorMessage = exception.Message,
-                        UpdatedAt = DateTimeOffset.UtcNow
-                    };
-                    failed = work.Snapshot;
+                        work.Snapshot = work.Snapshot with
+                        {
+                            ErrorCode = "DOWNLOAD_FAILED",
+                            ErrorMessage = exception.Message,
+                            UpdatedAt = DateTimeOffset.UtcNow
+                        };
+                        failed = work.Snapshot;
+                    }
                 }
             }
-            if (failed is not null)
+            if (committed)
+            {
+                StartupDiagnosticsAdapter.Warning($"Download {work.Request.TaskId:D} hit a post-commit failure; preserving the committed output.", exception);
+                if (work.GetSnapshot().State == DownloadTaskState.Merging)
+                {
+                    await SetStateIfCurrentAsync(work, DownloadTaskState.Finalizing, run.RunId).ConfigureAwait(false);
+                }
+                if (work.GetSnapshot().State != DownloadTaskState.Completed)
+                {
+                    await SetStateIfCurrentAsync(work, DownloadTaskState.Completed, run.RunId).ConfigureAwait(false);
+                }
+                await RecordHistoryAsync(work).ConfigureAwait(false);
+            }
+            else if (failed is not null)
             {
                 await SetStateIfCurrentAsync(work, DownloadTaskState.Failed, run.RunId).ConfigureAwait(false);
                 StartupDiagnosticsAdapter.Error($"Download {work.Request.TaskId:D} failed.", exception);
@@ -495,7 +502,10 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             {
                 DownloadTaskState.Queued or DownloadTaskState.Resolving => DurableOperationState.Preparing,
                 DownloadTaskState.DownloadingVideo or DownloadTaskState.DownloadingAudio or DownloadTaskState.DownloadingSegments => DurableOperationState.Downloading,
-                DownloadTaskState.Merging or DownloadTaskState.Finalizing => DurableOperationState.Finalizing,
+                DownloadTaskState.Merging or DownloadTaskState.Finalizing =>
+                    work.Snapshot.OperationState is DurableOperationState.Committed or DurableOperationState.CleanupPending
+                        ? work.Snapshot.OperationState
+                        : DurableOperationState.Finalizing,
                 DownloadTaskState.Completed when work.Snapshot.OperationState != DurableOperationState.CleanupPending => DurableOperationState.Committed,
                 DownloadTaskState.Failed => DurableOperationState.Failed,
                 _ => work.Snapshot.OperationState
@@ -567,7 +577,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
     private async Task ReplayObligationsAsync(CancellationToken cancellationToken)
     {
-        if (_obligations is null || _history is null) return;
+        if (_obligations is null) return;
         var pending = await _obligations.GetPendingAsync(100, cancellationToken).ConfigureAwait(false);
         foreach (var obligation in pending)
         {
@@ -576,6 +586,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 switch (obligation.Kind)
                 {
                     case DurableObligationKind.HistoryWrite:
+                        if (_history is null) throw new InvalidOperationException("The history repository is not configured.");
                         var snapshot = JsonSerializer.Deserialize<DownloadTaskSnapshot>(obligation.Payload);
                         if (snapshot is null) throw new InvalidDataException("Deferred history payload was invalid.");
                         await _history.AddAsync(snapshot, cancellationToken).ConfigureAwait(false);
@@ -594,6 +605,21 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             {
                 await _obligations.RecordFailureAsync(obligation.Id, exception.Message, cancellationToken).ConfigureAwait(false);
             }
+        }
+    }
+
+    private async Task RecordHistoryAsync(DownloadWork work)
+    {
+        if (_history is null) return;
+        var completed = work.GetSnapshot();
+        try
+        {
+            await _history.AddAsync(completed, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await EnqueueObligationAsync(DurableObligationKind.HistoryWrite, JsonSerializer.Serialize(completed), exception.Message).ConfigureAwait(false);
+            StartupDiagnosticsAdapter.Warning("History write deferred until the next startup.", exception);
         }
     }
 
@@ -628,7 +654,10 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
     {
         if (!Path.IsPathRooted(path)) return false;
         var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return full.Contains($"{Path.DirectorySeparatorChar}.novaclip{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+        var parent = Directory.GetParent(full);
+        return parent is not null &&
+            string.Equals(parent.Name, ".novaclip", StringComparison.OrdinalIgnoreCase) &&
+            Guid.TryParseExact(Path.GetFileName(full), "N", out _);
     }
 
     private static void TryDeleteFile(string path)
