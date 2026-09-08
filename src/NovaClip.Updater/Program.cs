@@ -133,7 +133,7 @@ internal static class Program
         return true;
     }
 
-    private static bool IsSafeDirectory(string path) =>
+    private static bool IsSafeDirectory(string? path) =>
         !string.IsNullOrWhiteSpace(path) &&
         Path.IsPathRooted(path) &&
         Directory.Exists(path) &&
