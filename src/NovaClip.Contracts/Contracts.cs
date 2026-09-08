@@ -6,7 +6,16 @@ public enum MediaDetectionState { Idle, WaitingForPageContext, Observing, Candid
 public enum UpdateChannel { Stable, Preview }
 
 public sealed record BrowserCookie(string Name, string Value, string Domain, string Path, DateTimeOffset? Expires, bool IsHttpOnly, bool IsSecure);
-public sealed record PageIdentity(string PageUrl, string? Bvid, long? Aid, long? Cid, long? EpisodeId, long NavigationGeneration);
+public sealed record PageIdentity(
+    string PageUrl,
+    string? Bvid,
+    long? Aid,
+    long? Cid,
+    long? EpisodeId,
+    long NavigationGeneration,
+    string? Title = null,
+    string? EpisodeTitle = null,
+    bool IsBangumi = false);
 public sealed record MediaFingerprint(string PageUrl, string? Bvid, long? Aid, long? Cid, long? EpisodeId, int? QualityId, string? Codec, long NavigationGeneration);
 public sealed record DetectionDiagnostic(string EventCode, MediaDetectionState State, DateTimeOffset Timestamp, string? Detail = null);
 

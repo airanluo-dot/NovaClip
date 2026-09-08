@@ -22,12 +22,10 @@ public sealed partial class BrowserPage : Page
     private readonly BrowserNavigationPolicy _policy = new();
     private readonly BrowserHomeService _home = new();
     private readonly LocalizationService _text = new();
-    private BilibiliPageContext? _pageContext;
-    private MediaDescriptor? _currentMedia;
-    private List<MediaTrack> _videoTracks = [];
+    private readonly MediaDetectionCoordinator _detector = new(Array.Empty<IMediaDetectionStrategy>());
     private Uri? _pendingExternalUri;
+    private Task? _externalLaunchTask;
     private bool _webViewRecoveryRequested;
-    private long _navigationGeneration;
     private Task? _initializationTask;
     private bool _isLoading;
     private static readonly object EnvironmentGate = new();
@@ -170,6 +168,7 @@ public sealed partial class BrowserPage : Page
             args.Cancel = true;
             return;
         }
+
         var decision = _policy.Evaluate(uri, BrowserNavigationKind.Redirect);
         if (decision != BrowserNavigationDecision.NavigateInCurrentView)
         {
@@ -177,10 +176,8 @@ public sealed partial class BrowserPage : Page
             if (decision is BrowserNavigationDecision.OpenInSystemBrowser or BrowserNavigationDecision.AskUser) HandleExternalNavigation(uri);
             return;
         }
-        _navigationGeneration++;
-        _pageContext = null;
-        _currentMedia = null;
-        _videoTracks.Clear();
+
+        _detector.BeginNavigation(uri);
         SetLoading(true);
         SetDetectionState(MediaDetectionState.WaitingForPageContext);
         StartupDiagnostics.Info("Browser.NavigationStarted");
@@ -197,67 +194,158 @@ public sealed partial class BrowserPage : Page
     private void Core_DocumentTitleChanged(CoreWebView2 sender, object args) => StartupDiagnostics.Info("Browser.DocumentTitleChanged");
     private void Core_ProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs args) => DispatcherQueue.TryEnqueue(() => ShowWebViewFailure(args.ProcessFailedKind.ToString()));
 
+    private void Detector_StateChanged(object? sender, MediaDetectionSnapshot snapshot)
+    {
+        DispatcherQueue.TryEnqueue(() => ApplyDetectionSnapshot(snapshot));
+    }
+
     private void Core_WebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
     {
-        if (!BilibiliBridgeMessageParser.TryParse(args.WebMessageAsJson, out var message) || message is null) return;
-        if (message.Type != BilibiliBridgeMessageType.PageContextChanged || !BilibiliBridgeMessageParser.TryReadPageContext(message, out var context)) return;
-        if (context is null || !IsCurrentPageContext(context.Url)) return;
-        _pageContext = context;
-        DispatcherQueue.TryEnqueue(() => { TitleText.Text = context!.Title; IdentityText.Text = context.Bvid ?? string.Empty; SetDetectionState(MediaDetectionState.Observing); });
+        if (!BilibiliBridgeMessageParser.TryParse(args.WebMessageAsJson, out var message) ||
+            message is null ||
+            message.Type != BilibiliBridgeMessageType.PageContextChanged ||
+            !BilibiliBridgeMessageParser.TryReadPageContext(message, out var context) ||
+            context is null ||
+            !IsCurrentPageContext(context.Url))
+        {
+            return;
+        }
+
+        var page = new PageIdentity(
+            context.Url,
+            context.Bvid,
+            context.Aid,
+            context.Cid,
+            context.EpisodeId,
+            0,
+            context.Title,
+            context.EpisodeTitle,
+            context.Kind.Equals("bangumi", StringComparison.OrdinalIgnoreCase));
+        _detector.UpdatePageContext(page);
+        StartupDiagnostics.Info("MediaDetection.PageContextAccepted");
     }
 
     private async void Core_WebResourceResponseReceived(CoreWebView2 sender, CoreWebView2WebResourceResponseReceivedEventArgs args)
     {
-        if (!Uri.TryCreate(args.Request.Uri, UriKind.Absolute, out var responseUri) || !BrowserNavigationPolicy.IsBilibiliHost(responseUri.Host) || !responseUri.AbsolutePath.Contains("/playurl", StringComparison.OrdinalIgnoreCase)) return;
-        var generation = _navigationGeneration;
+        if (!Uri.TryCreate(args.Request.Uri, UriKind.Absolute, out var responseUri) ||
+            !BrowserNavigationPolicy.IsBilibiliHost(responseUri.Host) ||
+            !responseUri.AbsolutePath.Contains("/playurl", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var page = _detector.Snapshot.Page;
+        var generation = page?.NavigationGeneration ?? 0;
+        if (page is null || generation == 0) return;
+
         try
         {
             using var stream = await args.Response.GetContentAsync();
             var json = await ReadBoundedTextAsync(stream.AsStreamForRead(), MaxPlayUrlResponseCharacters);
-            if (json is null || generation != _navigationGeneration) return;
-            var context = _pageContext is not null
-                ? new PlayUrlContext(_pageContext.Url, _pageContext.Title, _pageContext.Bvid, _pageContext.Aid, _pageContext.Cid, _pageContext.EpisodeId, _pageContext.EpisodeTitle, _pageContext.Kind.Equals("bangumi", StringComparison.OrdinalIgnoreCase), ResolverStrategy.PlayUrlResponse)
-                : new PlayUrlContext(sender.Source, _text.GetString("Browser_DefaultMediaTitle"));
+            if (json is null || _detector.Snapshot.Page?.NavigationGeneration != generation) return;
+
+            page = _detector.Snapshot.Page;
+            if (page is null || page.NavigationGeneration != generation) return;
+            var context = new PlayUrlContext(
+                page.PageUrl,
+                page.Title ?? _text.GetString("Browser_DefaultMediaTitle"),
+                page.Bvid,
+                page.Aid,
+                page.Cid,
+                page.EpisodeId,
+                page.EpisodeTitle,
+                page.IsBangumi,
+                ResolverStrategy.PlayUrlResponse);
             var result = _normalizer.Normalize(json, context);
-            if (generation == _navigationGeneration) DispatcherQueue.TryEnqueue(() => ApplyResolveResult(result));
-        }
-        catch (OperationCanceledException)
+            var fingerprint = new MediaFingerprint(
+                page.PageUrl,
+                page.Bvid,
+                page.Aid,
+                page.    private void ApplyDetectionSnapshot(MediaDetectionSnapshot snapshot)
+    {
+        SetDetectionState(snapshot.State);
+        if (snapshot.Media is not MediaDescriptor media)
         {
-            // WebView2 can cancel an in-flight response while navigating or closing.
+            AddDownloadButton.IsEnabled = false;
+            if (snapshot.State != MediaDetectionState.Ready) QualityCombo.Items.Clear();
+            return;
         }
-        catch (Exception exception) { DispatcherQueue.TryEnqueue(() => ShowError("MEDIA_PLAYURL_READ_FAILED", exception.Message)); }
+
+        var videoTracks = media.Tracks.Where(track => track.Type == TrackType.Video).ToList();
+        QualityCombo.Items.Clear();
+        foreach (var track in videoTracks)
+        {
+            QualityCombo.Items.Add(QualityName(track.QualityId) + " · " + (track.Codec ?? "—") + " · " + FormatBytes(track.Size));
+        }
+
+        if (videoTracks.Count > 0)
+        {
+            var preferred = SelectVideoTrack(videoTracks);
+            QualityCombo.SelectedIndex = Math.Max(0, videoTracks.IndexOf(preferred));
+        }
+
+        TitleText.Text = media.Title;
+        IdentityText.Text = media.Bvid ?? media.EpisodeId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+        TrackText.Text = videoTracks.Count == 0 && media.LegacySegments.Count > 0
+            ? "DURL · " + media.LegacySegments.Count.ToString(CultureInfo.InvariantCulture) + " segments"
+            : (media.VideoTrack?.Codec ?? "—") + " · " + (media.AudioTrack?.Codec ?? "—");
+        AddDownloadButton.IsEnabled = videoTracks.Count > 0 || media.AudioTrack is not null || media.LegacySegments.Count > 0;
+        MediaDetails.Visibility = Visibility.Visible;
+        StartupDiagnostics.Info("MediaDetection.Ready");
     }
 
-    private void ApplyResolveResult(ResolveResult result)
+    private static MediaTrack? SelectVideoTrack(IReadOnlyList<MediaTrack> tracks)
     {
-        if (!result.IsSuccess) { SetDetectionState(MediaDetectionState.Error); ShowError(result.Error?.Code ?? "MEDIA_NOT_FOUND", result.Error?.TechnicalMessage); return; }
-        _currentMedia = result.Media;
-        _videoTracks = result.Media!.Tracks.Where(track => track.Type == TrackType.Video).ToList();
-        QualityCombo.Items.Clear();
-        foreach (var track in _videoTracks) QualityCombo.Items.Add($"{QualityName(track.QualityId)} · {track.Codec ?? "—"} · {FormatBytes(track.Size)}");
-        if (QualityCombo.Items.Count > 0) QualityCombo.SelectedIndex = 0;
-        TitleText.Text = result.Media.Title;
-        IdentityText.Text = result.Media.Bvid ?? result.Media.EpisodeId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-        TrackText.Text = $"{result.Media.VideoTrack?.Codec ?? "—"} · {result.Media.AudioTrack?.Codec ?? "—"}";
-        AddDownloadButton.IsEnabled = _videoTracks.Count > 0;
-        SetDetectionState(MediaDetectionState.Ready);
-        StartupDiagnostics.Info("MediaDetection.Ready");
+        if (tracks.Count == 0) return null;
+        var codec = AppServices.Settings.DefaultCodec;
+        var filtered = codec.Equals("Auto", StringComparison.OrdinalIgnoreCase)
+            ? tracks
+            : tracks.Where(track => (track.Codec ?? string.Empty).Contains(codec, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (filtered.Count == 0) filtered = tracks;
+
+        var quality = AppServices.Settings.DefaultQuality;
+        if (quality.Equals("Highest", StringComparison.OrdinalIgnoreCase)) return filtered.OrderByDescending(track => track.QualityId ?? 0).First();
+        if (int.TryParse(quality.TrimEnd('P', 'p'), out var requested))
+        {
+            return filtered.OrderBy(track => Math.Abs((track.QualityId ?? 0) - requested)).First();
+        }
+
+        return filtered[0];
     }
 
     private async void AddDownloadButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentMedia is null || _videoTracks.Count == 0) return;
+        if (_detector.Snapshot.Media is not MediaDescriptor media) return;
+        var videoTracks = media.Tracks.Where(track => track.Type == TrackType.Video).ToList();
+        var video = videoTracks.Count == 0
+            ? null
+            : videoTracks[Math.Clamp(QualityCombo.SelectedIndex, 0, videoTracks.Count - 1)];
+        var audio = media.Tracks.FirstOrDefault(track => track.Type == TrackType.Audio);
+        if (video is null && audio is null && media.LegacySegments.Count == 0) return;
+
         try
         {
-            var video = _videoTracks[Math.Clamp(QualityCombo.SelectedIndex, 0, _videoTracks.Count - 1)];
-            var audio = _currentMedia.Tracks.FirstOrDefault(track => track.Type == TrackType.Audio);
-            var title = AppServices.FileNames.Sanitize(_currentMedia.Title, "Bilibili");
-            var outputFile = AppServices.FileNames.GetAvailablePath(AppServices.Settings.DownloadDirectory, $"{title}.mp4");
-            var requestHeaders = await CreateMediaRequestHeadersAsync(_currentMedia.PageUrl);
-            await AppServices.Downloads.EnqueueAsync(new DownloadRequest(Guid.NewGuid(), _currentMedia, video, audio, AppServices.Settings.DownloadDirectory, Path.GetFileName(outputFile), new RetryPolicy(AppServices.Settings.MaxRetryAttempts), AppServices.Settings.MergeAfterDownload, AppServices.Settings.DeleteTemporaryFilesAfterMerge, requestHeaders));
+            var title = AppServices.FileNames.Sanitize(media.Title, "Bilibili");
+            var extension = video is null && audio is not null ? ".m4a" : ".mp4";
+            var outputFileName = title + extension;
+            var requestHeaders = await CreateMediaRequestHeadersAsync(media.PageUrl);
+            await AppServices.Downloads.EnqueueAsync(new DownloadRequest(
+                Guid.NewGuid(),
+                media,
+                video,
+                audio,
+                AppServices.Settings.DownloadDirectory,
+                outputFileName,
+                new RetryPolicy(AppServices.Settings.MaxRetryAttempts),
+                AppServices.Settings.MergeAfterDownload,
+                AppServices.Settings.DeleteTemporaryFilesAfterMerge,
+                requestHeaders));
             ShowInfo(_text.GetString("Download_Queued"));
         }
-        catch (Exception exception) { ShowError("DOWNLOAD_CREATE_FAILED", exception.Message); }
+        catch (Exception exception)
+        {
+            ShowError("DOWNLOAD_CREATE_FAILED", exception.Message);
+        }
     }
 
     private void AddressBox_KeyDown(object sender, KeyRoutedEventArgs e) { if (e.Key == global::Windows.System.VirtualKey.Enter && _urlResolver.TryResolve(AddressBox.Text, out var uri)) { Navigate(uri); e.Handled = true; } }
@@ -338,10 +426,7 @@ public sealed partial class BrowserPage : Page
 
     public void ResetDetector()
     {
-        _pageContext = null;
-        _currentMedia = null;
-        _videoTracks.Clear();
-        SetDetectionState(MediaDetectionState.Observing);
+        _detector.Reset();
         StartupDiagnostics.Info("MediaDetection.Reset");
     }
 
@@ -349,7 +434,7 @@ public sealed partial class BrowserPage : Page
     {
         if (AppServices.Settings.ExternalLinkBehavior.Equals("System", StringComparison.OrdinalIgnoreCase))
         {
-            _ = LaunchExternalAsync(uri);
+            _externalLaunchTask = LaunchExternalAsync(uri);
         }
         else
         {
