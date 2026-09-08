@@ -6,20 +6,26 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$publishRoot = Join-Path $repoRoot "publish\win-x64"
-$portableRoot = Join-Path $repoRoot "$OutputRoot\NovaClip-win-x64-portable"
-$portableZip = Join-Path $repoRoot "$OutputRoot\NovaClip-win-x64-portable.zip"
+[xml]$versionProps = Get-Content (Join-Path $repoRoot "version.props") -Raw
+$version = [string]$versionProps.Project.PropertyGroup.NovaClipVersion
+$runtimeIdentifier = [string]$versionProps.Project.PropertyGroup.NovaClipRuntimeIdentifier
+if ([string]::IsNullOrWhiteSpace($version) -or [string]::IsNullOrWhiteSpace($runtimeIdentifier)) { throw "VERSION_PROPS_INVALID" }
+
+$publishRoot = Join-Path $repoRoot ("publish\" + $runtimeIdentifier)
+$artifactBase = "NovaClip-" + $version + "-" + $runtimeIdentifier
+$portableRoot = Join-Path $repoRoot ($OutputRoot + "\" + $artifactBase + "-portable")
+$portableZip = Join-Path $repoRoot ($OutputRoot + "\" + $artifactBase + "-portable.zip")
 $manifestName = "novaclip-package-manifest.json"
 
-New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot $OutputRoot) | Out-Null
 if (Test-Path $publishRoot) { Remove-Item -Recurse -Force $publishRoot }
 if (Test-Path $portableRoot) { Remove-Item -Recurse -Force $portableRoot }
 if (Test-Path $portableZip) { Remove-Item -Force $portableZip }
 
-$appPublishArgs = @("--configuration", $Configuration, "--framework", "net10.0-windows10.0.17763.0", "--runtime", "win-x64", "--self-contained", "true", "-p:Platform=x64", "-p:WindowsAppSDKSelfContained=true", "-o", $publishRoot)
+$appPublishArgs = @("--configuration", $Configuration, "--framework", "net10.0-windows10.0.17763.0", "--runtime", $runtimeIdentifier, "--self-contained", "true", "-p:Platform=x64", "-p:WindowsAppSDKSelfContained=true", "-o", $publishRoot)
 dotnet publish (Join-Path $repoRoot "src\NovaClip.App\NovaClip.App.csproj") @appPublishArgs
 
-$updaterPublishArgs = @("--configuration", $Configuration, "--framework", "net10.0", "--runtime", "win-x64", "--self-contained", "true", "-o", $publishRoot)
+$updaterPublishArgs = @("--configuration", $Configuration, "--framework", "net10.0", "--runtime", $runtimeIdentifier, "--self-contained", "true", "-o", $publishRoot)
 dotnet publish (Join-Path $repoRoot "src\NovaClip.Updater\NovaClip.Updater.csproj") @updaterPublishArgs
 
 New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
@@ -41,7 +47,7 @@ $files = @(
 $manifest = [ordered]@{
     schemaVersion = 1
     product = "NovaClip"
-    version = "1.0.0-beta.7"
+    version = $version
     files = $files
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $portableRoot $manifestName) -Encoding utf8
