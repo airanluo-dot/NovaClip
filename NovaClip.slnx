@@ -13,5 +13,6 @@
     <Project Path="tests/NovaClip.Bilibili.Tests/NovaClip.Bilibili.Tests.csproj" />
     <Project Path="tests/NovaClip.Infrastructure.Tests/NovaClip.Infrastructure.Tests.csproj" />
     <Project Path="tests/NovaClip.Windows.Tests/NovaClip.Windows.Tests.csproj" />
+    <Project Path="tests/NovaClip.Updater.Tests/NovaClip.Updater.Tests.csproj" />
   </Folder>
 </Solution>

@@ -25,6 +25,7 @@ jobs:
           dotnet restore tests/NovaClip.Core.Tests/NovaClip.Core.Tests.csproj
           dotnet restore tests/NovaClip.Infrastructure.Tests/NovaClip.Infrastructure.Tests.csproj
           dotnet restore tests/NovaClip.Bilibili.Tests/NovaClip.Bilibili.Tests.csproj
+      dotnet restore tests/NovaClip.Updater.Tests/NovaClip.Updater.Tests.csproj
       - name: Build
         run: |
           dotnet build src/NovaClip.Contracts/NovaClip.Contracts.csproj -c Release
@@ -37,6 +38,7 @@ jobs:
           dotnet test tests/NovaClip.Core.Tests/NovaClip.Core.Tests.csproj -c Release
           dotnet test tests/NovaClip.Infrastructure.Tests/NovaClip.Infrastructure.Tests.csproj -c Release
           dotnet test tests/NovaClip.Bilibili.Tests/NovaClip.Bilibili.Tests.csproj -c Release
+          dotnet test tests/NovaClip.Updater.Tests/NovaClip.Updater.Tests.csproj -c Release
   static-gates:
     runs-on: windows-latest
     steps:
