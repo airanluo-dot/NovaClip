@@ -76,7 +76,7 @@ public sealed class WindowsUpdateCoordinator : IDisposable
             var usePortable = AppServices.IsPortableInstall;
             var packageType = usePortable ? "portable" : "setup";
             var asset = usePortable ? update.PortableAsset : update.SetupAsset;
-            if (asset is null || !IsSafeAssetName(asset.Name)) return false;
+            if (asset is null || !IsExpectedPackageAsset(asset, packageType)) return false;
 
             var updater = Path.Combine(AppContext.BaseDirectory, "NovaClip.Updater.exe");
             if (!File.Exists(updater)) return false;
@@ -218,6 +218,23 @@ public sealed class WindowsUpdateCoordinator : IDisposable
         {
             // The temporary update directory is safe to retry on the next cleanup sweep.
         }
+    }
+
+    private static bool IsExpectedPackageAsset(AppUpdateAsset asset, string packageType)
+    {
+        if (!IsSafeAssetName(asset.Name)) return false;
+        var expectedSuffix = packageType == "portable" ? "-portable.zip" : "-setup.exe";
+        if (!asset.Name.EndsWith(expectedSuffix, StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrWhiteSpace(asset.ContentType)) return true;
+
+        var contentType = asset.ContentType.Trim();
+        return packageType == "portable"
+            ? contentType.Equals("application/zip", StringComparison.OrdinalIgnoreCase) ||
+              contentType.Equals("application/x-zip-compressed", StringComparison.OrdinalIgnoreCase) ||
+              contentType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase)
+            : contentType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase) ||
+              contentType.Equals("application/x-msdownload", StringComparison.OrdinalIgnoreCase) ||
+              contentType.Equals("application/vnd.microsoft.portable-executable", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsSafeAssetName(string name) =>
