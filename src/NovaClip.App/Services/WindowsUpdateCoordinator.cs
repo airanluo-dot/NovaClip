@@ -32,6 +32,11 @@ public sealed class WindowsUpdateCoordinator : IDisposable
     public AppUpdateInfo? LatestUpdate { get; private set; }
     public event EventHandler<AppUpdateInfo>? UpdateAvailable;
 
+    public void Stop()
+    {
+        _lifetime.Cancel();
+    }
+
     public async Task<AppUpdateInfo?> CheckAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
