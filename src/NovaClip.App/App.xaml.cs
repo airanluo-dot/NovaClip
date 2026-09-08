@@ -47,7 +47,8 @@ public partial class App : Application
         if (_resourcesFailed) return;
         try
         {
-            _singleInstance = await SingleInstanceCoordinator.AcquireOrForwardAsync();
+            var launchArgument = args.Arguments;
+            _singleInstance = await SingleInstanceCoordinator.AcquireOrForwardAsync(launchArgument);
             if (_singleInstance is null) return;
             _singleInstance.ActivateRequested += SingleInstance_ActivateRequested;
 
@@ -61,6 +62,7 @@ public partial class App : Application
 
             MainWindow = new MainWindow();
             MainWindow.Activate();
+            MainWindow.DispatcherQueue.TryEnqueue(() => ApplyActivationArgument(launchArgument));
             if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") == "1")
             {
                 MainWindow.DispatcherQueue.TryEnqueue(MainWindow.RunSmokeNavigation);
@@ -84,13 +86,27 @@ public partial class App : Application
         coordinator?.Dispose();
     }
 
-    private void SingleInstance_ActivateRequested(object? sender, EventArgs e)
+    private void SingleInstance_ActivateRequested(object? sender, SingleInstanceActivationEventArgs e)
     {
         MainWindow?.DispatcherQueue.TryEnqueue(() =>
         {
             MainWindow?.Activate();
-            Pages.BrowserPage.Current?.FocusAddressBar();
+            ApplyActivationArgument(e.Argument);
         });
+    }
+
+    private static void ApplyActivationArgument(string? argument)
+    {
+        var page = Pages.BrowserPage.Current ?? Pages.BrowserPage.Instance;
+        if (page is null) return;
+
+        if (string.IsNullOrWhiteSpace(argument))
+        {
+            page.FocusAddressBar();
+            return;
+        }
+
+        page.NavigateAddress(argument);
     }
 
     private void ShowStartupFailure(Exception exception)
