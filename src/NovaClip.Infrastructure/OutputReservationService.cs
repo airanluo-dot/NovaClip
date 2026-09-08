@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using NovaClip.Core;
@@ -49,7 +50,8 @@ public sealed class OutputReservationService : IOutputReservationService
             }
             catch (IOException)
             {
-                // Another task owns the marker or a stale marker is being reclaimed.
+                // Another task may own the marker. Reclaim only markers whose owner process is gone.
+                TryReclaimStaleMarker(markerPath);
             }
         }
 
@@ -115,6 +117,51 @@ public sealed class OutputReservationService : IOutputReservationService
         if (!content.StartsWith(reservation.TaskId.ToString("D", CultureInfo.InvariantCulture) + "|", StringComparison.OrdinalIgnoreCase))
         {
             throw new UnauthorizedAccessException("The output reservation belongs to another task.");
+        }
+    }
+
+    private static void TryReclaimStaleMarker(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return;
+            var parts = File.ReadAllText(path, Encoding.UTF8).Split('|');
+            var validTimestamp = parts.Length == 3 && DateTimeOffset.TryParse(
+                parts[2],
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out _);
+            var ownerAlive = parts.Length == 3 &&
+                int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var processId) &&
+                IsProcessAlive(processId);
+            if (!validTimestamp || !ownerAlive) File.Delete(path);
+        }
+        catch (IOException)
+        {
+            // The owner may be completing a commit or another process may be reclaiming it.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Keep the marker when its ownership cannot be established.
+        }
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        if (processId <= 0) return false;
+        if (processId == Environment.ProcessId) return true;
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch
+        {
+            return true;
         }
     }
 
