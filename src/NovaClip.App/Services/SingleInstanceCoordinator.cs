@@ -34,25 +34,21 @@ public sealed class SingleInstanceCoordinator : IDisposable
         string? argument = null,
         CancellationToken cancellationToken = default)
     {
-        using var mutex = new Mutex(initiallyOwned: false, MutexName, out _);
+        var mutex = new Mutex(initiallyOwned: false, MutexName, out _);
         var ownsMutex = false;
         try
         {
             try { ownsMutex = mutex.WaitOne(0); }
             catch (AbandonedMutexException) { ownsMutex = true; }
 
-            if (ownsMutex)
-            {
-                var ownedMutex = mutex;
-                GC.SuppressFinalize(ownedMutex);
-                return new SingleInstanceCoordinator(ownedMutex);
-            }
+            if (ownsMutex) return new SingleInstanceCoordinator(mutex);
 
             if (!await ForwardActivateAsync(argument, cancellationToken).ConfigureAwait(false))
             {
                 throw new InvalidOperationException("Another NovaClip instance is already running but did not accept the activation request.");
             }
 
+            mutex.Dispose();
             return null;
         }
         catch
@@ -62,6 +58,7 @@ public sealed class SingleInstanceCoordinator : IDisposable
                 try { mutex.ReleaseMutex(); } catch (ApplicationException or ObjectDisposedException) { }
             }
 
+            mutex.Dispose();
             throw;
         }
     }
