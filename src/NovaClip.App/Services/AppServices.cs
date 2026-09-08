@@ -1,11 +1,14 @@
 using System.Net;
+using System.Reflection;
 using NovaClip.Infrastructure;
 
 namespace NovaClip.App;
 
 public static class AppServices
 {
-    public const string CurrentVersion = "1.0.0-beta.7";
+    public static string CurrentVersion =>
+        typeof(AppServices).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? throw new InvalidOperationException("The application informational version is missing.");
 
     public static WindowsSettingsStore Settings { get; } = new();
     public static SqliteDownloadTaskRepository Repository { get; private set; } = null!;
