@@ -42,7 +42,7 @@ public sealed partial class DownloadsPage : Page
     private void Downloads_TaskChanged(object? sender, DownloadTaskSnapshot snapshot) =>
         _pendingSnapshots[snapshot.Id] = snapshot;
 
-    private void CoalesceTimer_Tick(DispatcherQueueTimer sender, object args)
+    private void CoalesceTimer_Tick(DispatcherQueueTimer sender, object? args)
     {
         foreach (var pair in _pendingSnapshots.ToArray())
         {

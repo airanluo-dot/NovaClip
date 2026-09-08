@@ -15,6 +15,7 @@ public sealed partial class HistoryPage : Page
     private Guid? _beforeId;
     private bool _hasMore = true;
     private bool _loading;
+    private Task? _loadTask;
 
     public HistoryPage()
     {
@@ -44,9 +45,10 @@ public sealed partial class HistoryPage : Page
 
     private void HistoryScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        if (_hasMore && !_loading && e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - 240)
+        if (_hasMore && !_loading && e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - 240 &&
+            (_loadTask is null || _loadTask.IsCompleted))
         {
-            _ = LoadNextPageFromUiAsync();
+            _loadTask = LoadNextPageFromUiAsync();
         }
     }
 
