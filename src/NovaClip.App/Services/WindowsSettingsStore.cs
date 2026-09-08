@@ -58,6 +58,7 @@ public sealed class WindowsSettingsStore
     {
         if (!File.Exists(_settingsPath)) return;
 
+        var defaults = Capture();
         try
         {
             if (new FileInfo(_settingsPath).Length > MaxSettingsBytes) throw new InvalidDataException("The settings file is too large.");
@@ -87,6 +88,7 @@ public sealed class WindowsSettingsStore
         }
         catch (Exception exception)
         {
+            Restore(defaults);
             StartupDiagnostics.Warning("Settings could not be loaded. Defaults will be used.", exception);
         }
     }
@@ -179,14 +181,22 @@ public sealed class WindowsSettingsStore
                     LastBrowserUrl);
                 var json = JsonSerializer.Serialize(document, JsonOptions);
                 var tempPath = _settingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
-                using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, leaveOpen: true))
+                try
                 {
-                    writer.Write(json);
-                    writer.Flush();
-                    stream.Flush(flushToDisk: true);
+                    using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+                    using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, leaveOpen: true))
+                    {
+                        writer.Write(json);
+                        writer.Flush();
+                        stream.Flush(flushToDisk: true);
+                    }
+
+                    File.Move(tempPath, _settingsPath, overwrite: true);
                 }
-                File.Move(tempPath, _settingsPath, overwrite: true);
+                finally
+                {
+                    try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                }
             }
             catch (Exception exception)
             {
@@ -212,6 +222,7 @@ public sealed class WindowsSettingsStore
     private static bool IsUsableBrowserUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         uri.Scheme is "http" or "https" &&
+        string.IsNullOrEmpty(uri.UserInfo) &&
         IsBilibiliHost(uri.Host);
 
     private static bool IsBilibiliHost(string host)
