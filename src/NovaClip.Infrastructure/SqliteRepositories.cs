@@ -230,7 +230,7 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
                     DownloadedBytes = excluded.DownloadedBytes,
                     TotalBytes = excluded.TotalBytes,
                     RunId = excluded.RunId
-                WHERE excluded.UpdatedAt >= \${table}.UpdatedAt;
+                WHERE excluded.UpdatedAt >= {table}.UpdatedAt;
                 """;
             AddParameters(command, snapshot);
             await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
@@ -388,14 +388,23 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = $"PRAGMA table_info({table})";
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var exists = false;
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase)) { exists = true; break; }
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                {
+                    exists = true;
+                    break;
+                }
+            }
         }
-        if (exists) return;
-        await ExecuteNonQueryAsync(connection, transaction, $"ALTER TABLE {table} ADD COLUMN {column} {definition}", cancellationToken).ConfigureAwait(false);
+
+        if (!exists)
+        {
+            await ExecuteNonQueryAsync(connection, transaction, $"ALTER TABLE {table} ADD COLUMN {column} {definition}", cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static async Task ExecuteNonQueryAsync(SqliteConnection connection, SqliteTransaction transaction, string sql, CancellationToken cancellationToken)
