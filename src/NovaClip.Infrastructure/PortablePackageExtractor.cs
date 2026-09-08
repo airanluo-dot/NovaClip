@@ -53,9 +53,11 @@ public static class PortablePackageExtractor
                 if (entry.Length < 0 || entry.Length > MaxSingleFileBytes) throw new InvalidDataException("The update archive contains an oversized file.");
                 if (total > MaxTotalUncompressedBytes - entry.Length) throw new InvalidDataException("The update archive exceeds its uncompressed-size budget.");
                 total += entry.Length;
-                if (entry.CompressedLength <= 0 ||
+                if (entry.CompressedLength < 0 ||
                     entry.CompressedLength > long.MaxValue / MaxCompressionRatio ||
-                    entry.Length > entry.CompressedLength * MaxCompressionRatio)
+                    (entry.Length > 0 &&
+                        (entry.CompressedLength <= 0 ||
+                         entry.Length > entry.CompressedLength * MaxCompressionRatio)))
                 {
                     throw new InvalidDataException("The update archive exceeds its compression-ratio budget.");
                 }
@@ -134,13 +136,24 @@ public static class PortablePackageExtractor
         return ((attributes >> 16) & 0xF000) == 0xA000;
     }
 
-    private static string NormalizeRoot(string path) =>
-        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    private static string NormalizeRoot(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var pathRoot = Path.GetPathRoot(full);
+        return !string.IsNullOrWhiteSpace(pathRoot) &&
+            string.Equals(full, pathRoot, StringComparison.OrdinalIgnoreCase)
+            ? pathRoot
+            : full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
 
     private static string ResolveSafe(string root, string relative)
     {
-        var rootWithSeparator = root + Path.DirectorySeparatorChar;
-        var candidate = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+        var normalizedRoot = NormalizeRoot(root);
+        var rootWithSeparator = normalizedRoot.EndsWith(Path.DirectorySeparatorChar) ||
+            normalizedRoot.EndsWith(Path.AltDirectorySeparatorChar)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
+        var candidate = Path.GetFullPath(Path.Combine(normalizedRoot, relative.Replace('/', Path.DirectorySeparatorChar)));
         if (!candidate.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The update archive path escaped its destination.");
         return candidate;
     }

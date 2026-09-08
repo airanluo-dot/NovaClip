@@ -36,6 +36,15 @@ jobs:
         run: |
           dotnet restore NovaClip.slnx
           dotnet build NovaClip.slnx -c Release --no-restore
+      - name: Generate dependency SBOM
+        shell: pwsh
+        run: ./scripts/write-dependency-sbom.ps1 -ProjectPath NovaClip.slnx -OutputPath artifacts/dependencies/novaclip.cdx.json
+      - name: Upload dependency SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: NovaClip-dependencies-${{ github.sha }}
+          path: artifacts/dependencies/novaclip.cdx.json
+          if-no-files-found: error
       - name: Dependency policy
         shell: pwsh
         run: ./scripts/check-dependencies.ps1

@@ -364,9 +364,22 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 ValidateStagingFile(audioStaging);
                 await CommitPrimaryAsync(work, videoStaging, run.StopSource.Token).ConfigureAwait(false);
                 var audioName = Path.GetFileNameWithoutExtension(work.GetSnapshot().OutputPath) + "-audio.m4a";
-                var audioReservation = await _reservations.ReserveAsync(work.Request.TaskId, work.Request.OutputDirectory, audioName, run.StopSource.Token).ConfigureAwait(false);
-                var committedAudio = await _reservations.CommitAsync(audioReservation, audioStaging, run.StopSource.Token).ConfigureAwait(false);
-                StartupDiagnosticsAdapter.Info($"Task {work.Request.TaskId:D} committed secondary audio {committedAudio.OutputPath}.");
+                OutputReservation? audioReservation = null;
+                try
+                {
+                    audioReservation = await _reservations.ReserveAsync(work.Request.TaskId, work.Request.OutputDirectory, audioName, run.StopSource.Token).ConfigureAwait(false);
+                    var committedAudio = await _reservations.CommitAsync(audioReservation, audioStaging, run.StopSource.Token).ConfigureAwait(false);
+                    StartupDiagnostics.Info($"Task {work.Request.TaskId:D} committed secondary audio {committedAudio.OutputPath}.");
+                }
+                catch
+                {
+                    if (audioReservation is not null)
+                    {
+                        try { await _reservations.ReleaseAsync(audioReservation, CancellationToken.None).ConfigureAwait(false); } catch { }
+                    }
+
+                    throw;
+                }
             }
             else
             {

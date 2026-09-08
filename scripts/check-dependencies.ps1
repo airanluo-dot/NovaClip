@@ -9,6 +9,19 @@ if ($buildProps -notmatch "<LangVersion>14.0</LangVersion>") { throw "DEPENDENCY
 $globalJson = Get-Content (Join-Path $root "global.json") -Raw
 if ($globalJson -notmatch '"rollForward"\s*:\s*"disable"') { throw "DEPENDENCY_POLICY_SDK_ROLLFORWARD_REQUIRED" }
 
+$noticePath = Join-Path $root "docs\THIRD_PARTY_NOTICES.md"
+if (-not (Test-Path $noticePath)) { throw "DEPENDENCY_POLICY_LICENSE_MANIFEST_MISSING" }
+$noticeText = Get-Content $noticePath -Raw
+$packageIds = [regex]::Matches($props, '<PackageVersion\s+Include="([^"]+)"') |
+    ForEach-Object { $_.Groups[1].Value } |
+    Sort-Object -Unique
+foreach ($packageId in $packageIds) {
+    if ($noticeText -notmatch ("(?m)^\|\s*" + [regex]::Escape($packageId) + "\s*\|")) {
+        throw "DEPENDENCY_POLICY_LICENSE_ENTRY_MISSING:" + $packageId
+    }
+}
+if (-not (Test-Path (Join-Path $root "scripts\write-dependency-sbom.ps1"))) { throw "DEPENDENCY_POLICY_SBOM_SCRIPT_MISSING" }
+
 $versions = [regex]::Matches($props, 'Version="([^"]+)"')
 foreach ($match in $versions) {
     if ($match.Groups[1].Value -match "[*]|^\s*$|[-+](preview|alpha|beta)") { throw "DEPENDENCY_POLICY_FLOATING_OR_PREVIEW_VERSION:" + $match.Groups[1].Value }
@@ -25,4 +38,4 @@ foreach ($workflow in $workflowFiles) {
         if ($match.Groups[2].Value -notmatch '^[0-9a-f]{40}$') { throw "DEPENDENCY_POLICY_ACTION_NOT_PINNED:" + $match.Groups[1].Value }
     }
 }
-Write-Host "Dependency policy passed: centrally pinned packages, lock-file restore enabled, immutable Actions, no project-level version overrides and no preview/floating package versions."
+Write-Host "Dependency policy passed: centrally pinned packages, lock-file restore enabled, immutable Actions, covered license manifest, SBOM generation and no project-level version overrides or preview/floating package versions."

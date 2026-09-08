@@ -354,7 +354,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             var bytes = Encoding.UTF8.GetBytes(content);
             await using (var stream = new FileStream(
                 temporaryPath,
-                FileMode.CreateNew,
+                FileMode.Create,
                 FileAccess.Write,
                 FileShare.None,
                 4096,
