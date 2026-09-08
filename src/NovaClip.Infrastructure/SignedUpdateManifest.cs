@@ -70,7 +70,8 @@ public static class SignedUpdateManifestVerifier
                 manifest = null;
                 return false;
             }
-            if (manifest.Channel is not ("stable" or "preview") || manifest.Assets is null || manifest.Assets.Count == 0 || manifest.Assets.Count > MaxAssets)
+            if (string.IsNullOrWhiteSpace(manifest.KeyId) || manifest.KeyId.Length > 128 ||
+                manifest.Channel is not ("stable" or "preview") || manifest.Assets is null || manifest.Assets.Count == 0 || manifest.Assets.Count > MaxAssets)
             {
                 error = "The signed update manifest channel or asset list is invalid.";
                 manifest = null;

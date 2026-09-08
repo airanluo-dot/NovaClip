@@ -191,7 +191,8 @@ public sealed class WindowsUpdateCoordinator : IDisposable
         if (!SemanticVersion.TryParse(update.Version, out var updateVersion) ||
             !SemanticVersion.TryParse(manifest!.Version, out var manifestVersion) ||
             updateVersion.CompareTo(manifestVersion) != 0 ||
-            !string.Equals(manifest.Channel, expectedChannel, StringComparison.Ordinal))
+            !string.Equals(manifest.Channel, expectedChannel, StringComparison.Ordinal) ||
+            !string.Equals(manifest.KeyId, SignedUpdateTrustPolicy.KeyId, StringComparison.Ordinal))
         {
             throw new InvalidDataException("签名清单版本或发布通道不匹配，已拒绝执行。");
         }

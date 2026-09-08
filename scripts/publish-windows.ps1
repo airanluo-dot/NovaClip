@@ -48,6 +48,7 @@ $manifest = [ordered]@{
     schemaVersion = 1
     product = "NovaClip"
     version = $version
+    runtimeIdentifier = $runtimeIdentifier
     files = $files
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $portableRoot $manifestName) -Encoding utf8

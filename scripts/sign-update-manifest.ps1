@@ -12,7 +12,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 [xml]$versionProps = Get-Content (Join-Path $repoRoot "version.props") -Raw
 $version = [string]$versionProps.Project.PropertyGroup.NovaClipVersion
 $runtimeIdentifier = [string]$versionProps.Project.PropertyGroup.NovaClipRuntimeIdentifier
-if ([string]::IsNullOrWhiteSpace($version) -or $runtimeIdentifier -ne "win-x64") { throw "VERSION_PROPS_INVALID" }
+if ([string]::IsNullOrWhiteSpace($version) -or [string]::IsNullOrWhiteSpace($runtimeIdentifier)) { throw "VERSION_PROPS_INVALID" }
 
 $portable = @(Get-ChildItem -Path $InputRoot -File -Filter "*-portable.zip")
 $setup = @(Get-ChildItem -Path $InputRoot -File -Filter "*-setup.exe")
