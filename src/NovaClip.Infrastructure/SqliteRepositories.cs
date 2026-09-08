@@ -21,7 +21,8 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared
+            Cache = SqliteCacheMode.Shared,
+            Pooling = false
         }.ToString();
     }
 
