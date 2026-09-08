@@ -29,6 +29,23 @@ public sealed class NativeRebuildTests
         Assert.NotEqual(MediaDetectionState.Ready, coordinator.Snapshot.State);
     }
 
+    [Fact]
+    public async Task StrategyFailureBecomesRecoverableCoordinatorError()
+    {
+        var coordinator = new MediaDetectionCoordinator([new ThrowingStrategy()]);
+        coordinator.BeginNavigation(new Uri("https://www.bilibili.com/video/BV1ab411c7mD"));
+        await coordinator.DetectAsync();
+        Assert.Equal(MediaDetectionState.Error, coordinator.Snapshot.State);
+        Assert.Equal("MEDIA_STRATEGY_FAILED", coordinator.Snapshot.ErrorCode);
+    }
+
+    [Fact]
+    public void ResolverAcceptsBareB23Host()
+    {
+        Assert.True(new BilibiliUrlResolver().TryResolve("b23.tv/abc", out var uri));
+        Assert.Equal("https://b23.tv/abc", uri.ToString());
+    }
+
     private sealed class BlockingStrategy : IMediaDetectionStrategy
     {
         private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -39,5 +56,11 @@ public sealed class NativeRebuildTests
             await _gate.Task.WaitAsync(cancellationToken);
             return new(true, MediaDetectionState.Ready, new MediaFingerprint(page.PageUrl, page.Bvid, page.Aid, page.Cid, page.EpisodeId, 80, "AVC", page.NavigationGeneration), new object());
         }
+    }
+
+    private sealed class ThrowingStrategy : IMediaDetectionStrategy
+    {
+        public string Name => "throwing";
+        public Task<MediaDetectionResult> TryResolveAsync(PageIdentity page, CancellationToken cancellationToken) => throw new InvalidOperationException("fixture failure");
     }
 }

@@ -7,16 +7,16 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier>$(NovaClipRuntimeIdentifier)</RuntimeIdentifier>
     <WindowsPackageType>None</WindowsPackageType>
     <EnableMsixTooling>false</EnableMsixTooling>
     <UseWinUI>true</UseWinUI>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <PublishSingleFile>false</PublishSingleFile>
     <PublishReadyToRun>false</PublishReadyToRun>
-    <AssemblyVersion>1.0.0.5</AssemblyVersion>
-    <FileVersion>1.0.0.5</FileVersion>
-    <InformationalVersion>1.0.0-beta.5</InformationalVersion>
+    <AssemblyVersion>$(NovaClipAssemblyVersion)</AssemblyVersion>
+    <FileVersion>$(NovaClipAssemblyVersion)</FileVersion>
+    <InformationalVersion>$(NovaClipVersion)</InformationalVersion>
     <ApplicationIcon>..\..\assets\icons\NovaClip.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
@@ -32,11 +32,6 @@
     <Content Include="..\..\assets\icons\NovaClip.png" Link="assets\icons\NovaClip.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\assets\icons\NovaClip.ico" Link="assets\icons\NovaClip.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
-  <!--
-    dotnet publish does not automatically copy the compiled WinUI resource
-    index for this unpackaged app. At runtime XAML pages are resolved from
-    resources.pri next to NovaClip.exe, so copy NovaClip.pri explicitly.
-  -->
   <Target Name="CopyAppPriToPublish" AfterTargets="Publish">
     <Copy SourceFiles="$(TargetDir)$(TargetName).pri"
           DestinationFiles="$(PublishDir)resources.pri"

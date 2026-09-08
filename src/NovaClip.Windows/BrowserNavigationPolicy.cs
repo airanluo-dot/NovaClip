@@ -8,7 +8,7 @@ public sealed class BrowserNavigationPolicy : IBrowserNavigationPolicy
 
     public BrowserNavigationDecision Evaluate(Uri uri, BrowserNavigationKind kind)
     {
-        if (!uri.IsAbsoluteUri || BlockedSchemes.Contains(uri.Scheme)) return BrowserNavigationDecision.Block;
+        if (uri is null || !uri.IsAbsoluteUri || BlockedSchemes.Contains(uri.Scheme)) return BrowserNavigationDecision.Block;
         if (uri.Scheme is not ("http" or "https")) return BrowserNavigationDecision.Block;
         if (IsBilibiliHost(uri.Host)) return BrowserNavigationDecision.NavigateInCurrentView;
         return kind == BrowserNavigationKind.NewWindow
@@ -16,10 +16,14 @@ public sealed class BrowserNavigationPolicy : IBrowserNavigationPolicy
             : BrowserNavigationDecision.OpenInSystemBrowser;
     }
 
-    internal static bool IsBilibiliHost(string host) =>
-        host.Equals("bilibili.com", StringComparison.OrdinalIgnoreCase) ||
-        host.EndsWith(".bilibili.com", StringComparison.OrdinalIgnoreCase) ||
-        host.Equals("b23.tv", StringComparison.OrdinalIgnoreCase);
+    public static bool IsBilibiliHost(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host)) return false;
+        var normalized = host.TrimEnd('.');
+        return normalized.Equals("bilibili.com", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".bilibili.com", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("b23.tv", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 public sealed class BrowserHomeService : IBrowserHomeService

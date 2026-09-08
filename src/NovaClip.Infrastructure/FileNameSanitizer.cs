@@ -24,22 +24,18 @@ public sealed class FileNameSanitizer : IFileNameSanitizer
 
         candidate = builder.ToString().Trim().TrimEnd('.', ' ');
         if (candidate.Length == 0) candidate = fallback;
-        if (ReservedNames.Contains(Path.GetFileNameWithoutExtension(candidate))) candidate = $"_{candidate}";
+        if (ReservedNames.Contains(Path.GetFileNameWithoutExtension(candidate))) candidate = "_" + candidate;
         return candidate.Length > 180 ? candidate[..180].TrimEnd('.', ' ') : candidate;
     }
 
     public string GetAvailablePath(string directory, string fileName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        if (!Path.IsPathRooted(directory) || Path.GetFileName(fileName) != fileName) throw new ArgumentException("A rooted directory and a single file name are required.");
         Directory.CreateDirectory(directory);
-        var baseName = Path.GetFileNameWithoutExtension(fileName);
-        var extension = Path.GetExtension(fileName);
-        var candidate = Path.Combine(directory, fileName);
-        var index = 1;
-        while (File.Exists(candidate))
-        {
-            candidate = Path.Combine(directory, $"{baseName} ({index++}){extension}");
-        }
-
-        return candidate;
+        // This method is retained for compatibility only. It deliberately does not
+        // claim a path is free; callers must use IOutputReservationService.
+        return Path.Combine(directory, fileName);
     }
 }

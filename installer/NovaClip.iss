@@ -4,10 +4,17 @@
 #ifndef OutputDir
 #define OutputDir "artifacts\\windows"
 #endif
+#ifndef ProductVersion
+#define ProductVersion "0.0.0.0"
+#endif
+#ifndef DisplayVersion
+#define DisplayVersion ProductVersion
+#endif
+#ifndef OutputBaseFilename
+#define OutputBaseFilename "NovaClip-win-x64-setup"
+#endif
 
 #define ProductName "NovaClip"
-#define ProductVersion "1.0.0.4"
-#define DisplayVersion "1.0.0-beta.5"
 #define ProductPublisher "Aren Vox"
 #define ProductExe "NovaClip.exe"
 
@@ -17,7 +24,7 @@ AppName={#ProductName}
 AppVersion={#ProductVersion}
 AppVerName={#ProductName} {#DisplayVersion}
 AppPublisher={#ProductPublisher}
-DefaultDirName={localappdata}\NovaClip\App
+DefaultDirName={localappdata}\\NovaClip\\App
 UsePreviousAppDir=no
 DefaultGroupName={#ProductName}
 PrivilegesRequired=lowest
@@ -26,12 +33,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
 OutputDir={#OutputDir}
-OutputBaseFilename=NovaClip-1.0.0-beta.5-win-x64-setup
+OutputBaseFilename={#OutputBaseFilename}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-SetupIconFile=..\assets\icons\NovaClip.ico
-UninstallDisplayIcon={app}\{#ProductExe}
+SetupIconFile=..\\assets\\icons\\NovaClip.ico
+UninstallDisplayIcon={app}\\{#ProductExe}
 VersionInfoVersion={#ProductVersion}
 VersionInfoProductVersion={#ProductVersion}
 VersionInfoDescription=NovaClip Bilibili native Windows download manager
@@ -40,14 +47,14 @@ VersionInfoDescription=NovaClip Bilibili native Windows download manager
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "portable.marker"
+Source: "{#PublishDir}\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "portable.marker;novaclip-package-manifest.json"
 
 [Icons]
-Name: "{autoprograms}\NovaClip"; Filename: "{app}\{#ProductExe}"
-Name: "{autodesktop}\NovaClip"; Filename: "{app}\{#ProductExe}"; Tasks: desktopicon
+Name: "{autoprograms}\\NovaClip"; Filename: "{app}\\{#ProductExe}"
+Name: "{autodesktop}\\NovaClip"; Filename: "{app}\\{#ProductExe}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Run]
-Filename: "{app}\{#ProductExe}"; Description: "Launch NovaClip"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\\{#ProductExe}"; Description: "Launch NovaClip"; Flags: nowait postinstall skipifsilent

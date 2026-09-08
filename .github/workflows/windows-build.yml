@@ -2,26 +2,53 @@ name: Windows native build and acceptance
 
 on:
   push:
-    branches: [main, refactor/beta.4-native-rebuild]
-    tags: ["v1.0.0-beta.5"]
+    branches: [main, refactor/beta.4-native-rebuild, codex/nova-clip-1.0.0-beta.7-remediation]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
+    outputs:
+      runtime_identifier: ${{ steps.version.outputs.runtimeIdentifier }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.400
+      - name: Read build identity
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$versionProps = Get-Content version.props -Raw
+          $version = [string]$versionProps.Project.PropertyGroup.NovaClipVersion
+          $assemblyVersion = [string]$versionProps.Project.PropertyGroup.NovaClipAssemblyVersion
+          $runtimeIdentifier = [string]$versionProps.Project.PropertyGroup.NovaClipRuntimeIdentifier
+          if ([string]::IsNullOrWhiteSpace($version) -or [string]::IsNullOrWhiteSpace($assemblyVersion) -or [string]::IsNullOrWhiteSpace($runtimeIdentifier)) { throw "VERSION_PROPS_INVALID" }
+          if ($env:GITHUB_REF.StartsWith("refs/tags/", [StringComparison]::OrdinalIgnoreCase) -and $env:GITHUB_REF.Substring(10) -ne ("v" + $version)) { throw "TAG_VERSION_MISMATCH" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "assemblyVersion=$assemblyVersion" >> $env:GITHUB_OUTPUT
+          "runtimeIdentifier=$runtimeIdentifier" >> $env:GITHUB_OUTPUT
       - name: Restore and build native solution
         run: |
           dotnet restore NovaClip.slnx
           dotnet build NovaClip.slnx -c Release --no-restore
+      - name: Generate dependency SBOM
+        shell: pwsh
+        run: ./scripts/write-dependency-sbom.ps1 -ProjectPath NovaClip.slnx -OutputPath artifacts/dependencies/novaclip.cdx.json
+      - name: Upload dependency SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: NovaClip-dependencies-${{ github.sha }}
+          path: artifacts/dependencies/novaclip.cdx.json
+          if-no-files-found: error
+      - name: Dependency policy
+        shell: pwsh
+        run: ./scripts/check-dependencies.ps1
       - name: Run tests
         run: dotnet test NovaClip.slnx -c Release --no-build --logger "trx;LogFileName=native-rebuild.trx"
       - name: Enforce localization and architecture
@@ -32,16 +59,33 @@ jobs:
       - name: Publish portable package
         shell: pwsh
         run: ./scripts/publish-windows.ps1 -Configuration Release -OutputRoot artifacts/windows
-      - name: Verify WinUI resources
+      - name: Verify package and WinUI resources
         shell: pwsh
         run: |
-          $publish = Join-Path "${{ github.workspace }}" "publish\win-x64"
+          [xml]$versionProps = Get-Content version.props -Raw
+          $version = [string]$versionProps.Project.PropertyGroup.NovaClipVersion
+          $runtimeIdentifier = [string]$versionProps.Project.PropertyGroup.NovaClipRuntimeIdentifier
+          if ([string]::IsNullOrWhiteSpace($runtimeIdentifier)) { throw "VERSION_PROPS_INVALID" }
+          $publish = Join-Path "${{ github.workspace }}" ("publish\" + $runtimeIdentifier)
           if (-not (Test-Path (Join-Path $publish "resources.pri"))) { throw "PUBLISH_MISSING_RESOURCES_PRI" }
           if (-not (Test-Path (Join-Path $publish "NovaClip.exe"))) { throw "PUBLISH_MISSING_APP_EXECUTABLE" }
+          $artifactRoot = Join-Path "${{ github.workspace }}" "artifacts\windows"
+          $portable = Get-ChildItem $artifactRoot -Directory -Filter "*-portable" | Select-Object -First 1
+          if ($null -eq $portable) { throw "PACKAGE_PORTABLE_DIRECTORY_MISSING" }
+          $manifest = Get-Content (Join-Path $portable.FullName "novaclip-package-manifest.json") -Raw | ConvertFrom-Json
+          if ($manifest.schemaVersion -ne 1 -or $manifest.product -ne "NovaClip" -or $manifest.version -ne $version -or $manifest.runtimeIdentifier -ne $runtimeIdentifier -or $manifest.files.Count -lt 3) { throw "PACKAGE_MANIFEST_INVALID" }
+          foreach ($file in $manifest.files) {
+            $path = Join-Path $portable.FullName ($file.path -replace '/', '\')
+            if (-not (Test-Path $path)) { throw "PACKAGE_MANIFEST_FILE_MISSING:" + $file.path }
+            $hash = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne $file.sha256) { throw "PACKAGE_MANIFEST_HASH_MISMATCH:" + $file.path }
+          }
       - name: Smoke test real page construction
         shell: pwsh
         run: |
-          $exe = Join-Path "${{ github.workspace }}" "publish\win-x64\NovaClip.exe"
+          [xml]$versionProps = Get-Content version.props -Raw
+          $runtimeIdentifier = [string]$versionProps.Project.PropertyGroup.NovaClipRuntimeIdentifier
+          $exe = Join-Path "${{ github.workspace }}" ("publish\" + $runtimeIdentifier + "\NovaClip.exe")
           $log = Join-Path $env:LOCALAPPDATA "NovaClip\Logs\startup.log"
           if (Test-Path $log) { Remove-Item $log -Force }
           $env:NOVACLIP_CI_SMOKE = "1"
@@ -55,37 +99,51 @@ jobs:
             foreach ($marker in $markers) { if ($text -notmatch [regex]::Escape($marker)) { $ready = $false; break } }
           } while ((Get-Date) -lt $deadline -and -not $ready -and -not $process.HasExited)
           Write-Host $text
-          foreach ($marker in $markers) { if ($text -notmatch [regex]::Escape($marker)) { Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force; throw "SMOKE_MARKER_MISSING:$marker" } }
+          foreach ($marker in $markers) { if ($text -notmatch [regex]::Escape($marker)) { Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force; throw "SMOKE_MARKER_MISSING:" + $marker } }
           if ($text -match "APP_STARTUP_FAILED|XamlParseException|NAVIGATION_FAILED") { Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force; throw "SMOKE_STARTUP_ERROR" }
           Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Build installer
         shell: pwsh
-        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DPublishDir=${{ github.workspace }}\publish\win-x64" "/DOutputDir=${{ github.workspace }}\artifacts\windows" installer\NovaClip.iss'
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $assemblyVersion = "${{ steps.version.outputs.assemblyVersion }}"
+          $runtimeIdentifier = "${{ steps.version.outputs.runtimeIdentifier }}"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DProductVersion=$assemblyVersion" "/DDisplayVersion=$version" "/DOutputBaseFilename=NovaClip-$version-$runtimeIdentifier-setup" "/DPublishDir=${{ github.workspace }}\publish\$runtimeIdentifier" "/DOutputDir=${{ github.workspace }}\artifacts\windows" installer\NovaClip.iss
+      - name: Create signed update manifest
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          NOVACLIP_UPDATE_SIGNING_KEY_PEM: ${{ secrets.NOVACLIP_UPDATE_SIGNING_KEY_PEM }}
+        run: ./scripts/sign-update-manifest.ps1 -InputRoot artifacts/windows
       - name: Hash deliverables
         shell: pwsh
         run: Get-ChildItem artifacts/windows -File | Get-FileHash -Algorithm SHA256 | Format-Table
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: NovaClip-1.0.0-beta.5-win-x64-${{ github.sha }}
+          name: NovaClip-${{ steps.version.outputs.runtimeIdentifier }}-${{ github.sha }}
           path: |
-            artifacts/windows/NovaClip-win-x64-portable.zip
-            artifacts/windows/NovaClip-1.0.0-beta.5-win-x64-setup.exe
+            artifacts/windows/*.zip
+            artifacts/windows/*-setup.exe
+            artifacts/windows/novaclip-update-manifest.json
+            artifacts/windows/novaclip-update-manifest.sig
           if-no-files-found: error
 
   release:
-    if: github.ref == 'refs/tags/v1.0.0-beta.5'
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: NovaClip-1.0.0-beta.5-win-x64-${{ github.sha }}
+          name: NovaClip-${{ needs.build.outputs.runtime_identifier }}-${{ github.sha }}
           path: release-assets
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           prerelease: true
-          name: NovaClip 1.0.0-beta.5 — Startup Reliability Fix
+          name: NovaClip ${{ github.ref_name }} — Remediation and Safety Baseline
           generate_release_notes: true
           files: release-assets/*

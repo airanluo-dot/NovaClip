@@ -15,13 +15,21 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         Title = new LocalizationService().GetString("MainWindow_Title");
         TryConfigureBackdrop();
+        ApplyTheme(AppServices.Settings.Theme);
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         NavigateTo("browser");
         RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
         InstallKeyboardAccelerators();
-        Closed += (_, _) => StartupDiagnostics.Info("MainWindow.Closed");
+        Closed += MainWindow_Closed;
         StartupDiagnostics.Info("Shell.Ready");
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        StartupDiagnostics.Info("MainWindow.Closed");
+        AppServices.BeginShutdown();
+        (Microsoft.UI.Xaml.Application.Current as App)?.DisposeSingleInstance();
     }
 
     private void TryConfigureBackdrop()
@@ -42,6 +50,16 @@ public sealed partial class MainWindow : Window
         foreach (var tag in new[] { "downloads", "history", "settings", "browser" }) NavigateTo(tag);
     }
 
+    public void ApplyTheme(string theme)
+    {
+        RootNavigationView.RequestedTheme = theme switch
+        {
+            "Light" => ElementTheme.Light,
+            "Dark" => ElementTheme.Dark,
+            _ => ElementTheme.Default
+        };
+    }
+
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         if (args.IsSettingsSelected) { NavigateTo("settings"); return; }
@@ -59,8 +77,8 @@ public sealed partial class MainWindow : Window
             _ => typeof(Pages.BrowserPage)
         };
         if (ContentFrame.CurrentSourcePageType == pageType) return;
-        if (!ContentFrame.Navigate(pageType)) throw new InvalidOperationException($"NAVIGATION_FAILED:{pageType.Name}");
-        StartupDiagnostics.Info($"{pageType.Name}.Ready");
+        if (!ContentFrame.Navigate(pageType)) throw new InvalidOperationException("NAVIGATION_FAILED:" + pageType.Name);
+        StartupDiagnostics.Info(pageType.Name + ".Ready");
     }
 
     private void InstallKeyboardAccelerators()

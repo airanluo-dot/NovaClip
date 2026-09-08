@@ -42,4 +42,22 @@ public sealed class CoreTests
         Assert.True(SemanticVersion.TryParse(candidate, out var right));
         Assert.Equal(candidateIsNewer, right.CompareTo(left) > 0);
     }
+
+    [Theory]
+    [InlineData("1.0", false)]
+    [InlineData("1.0.0-", false)]
+    [InlineData("1.01.0", false)]
+    [InlineData("1.0.0+build", true)]
+    public void SemanticVersionParserRejectsMalformedCoreAndAcceptsBuildMetadata(string value, bool expected)
+    {
+        Assert.Equal(expected, SemanticVersion.TryParse(value, out _));
+    }
+
+    [Fact]
+    public void SemanticVersionComparesLargeNumericPrereleaseIdentifiers()
+    {
+        Assert.True(SemanticVersion.TryParse("1.0.0-alpha.999999999999999999999", out var large));
+        Assert.True(SemanticVersion.TryParse("1.0.0-alpha.2", out var small));
+        Assert.True(large > small);
+    }
 }

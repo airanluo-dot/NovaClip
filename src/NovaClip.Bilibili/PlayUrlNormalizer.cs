@@ -6,12 +6,22 @@ namespace NovaClip.Bilibili;
 
 public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
 {
+    private const int MaxResponseLength = 10_000_000;
+
     public ResolveResult Normalize(string json, PlayUrlContext context)
     {
+        if (string.IsNullOrWhiteSpace(json) || json.Length > MaxResponseLength || context is null)
+        {
+            return ResolveResult.Failure(new AppError("RESOLVE_INVALID_RESPONSE", "B 站返回的数据格式暂时无法识别。", "PlayURL response was empty, oversized, or missing context.", true, "刷新页面后重试"));
+        }
         try
         {
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return ResolveResult.Failure(new AppError("RESOLVE_INVALID_RESPONSE", "B 站返回的数据格式暂时无法识别。", "PlayURL response root was not an object.", true, "刷新页面后重试"));
+            }
             var code = GetInt64(root, "code") ?? 0;
             if (code != 0)
             {
@@ -19,7 +29,7 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
             }
 
             var data = SelectData(root);
-            if (data.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            if (data.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null || data.ValueKind != JsonValueKind.Object)
             {
                 return ResolveResult.Failure(new AppError("RESOLVE_PLAYURL_NOT_FOUND", "没有找到可用的播放信息。", "PlayURL response did not contain data.", true, "刷新页面后重试"));
             }
@@ -40,7 +50,7 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
                 foreach (var segment in durl.EnumerateArray())
                 {
                     var urls = ParseUrls(segment, "url");
-                    if (urls.Count > 0) legacySegments.Add(new LegacyMediaSegment(index++, urls, GetInt64(segment, "size"), GetDouble(segment, "length") is double length ? length / 1000 : null));
+                    if (urls.Count > 0) legacySegments.Add(new LegacyMediaSegment(index++, urls, GetInt64(segment, "size") is long size && size > 0 ? size : null, GetDouble(segment, "length") is double length && length > 0 ? length / 1000 : null));
                 }
             }
 
@@ -71,6 +81,14 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
         {
             return ResolveResult.Failure(new AppError("RESOLVE_PARSE_CHANGED", "B 站返回的数据格式暂时无法识别。", exception.Message, true, "更新页面后重试", exception));
         }
+        catch (InvalidOperationException exception)
+        {
+            return ResolveResult.Failure(new AppError("RESOLVE_PARSE_CHANGED", "B 站返回的数据格式暂时无法识别。", exception.Message, true, "更新页面后重试", exception));
+        }
+        catch (OverflowException exception)
+        {
+            return ResolveResult.Failure(new AppError("RESOLVE_PARSE_CHANGED", "B 站返回的数据格式暂时无法识别。", exception.Message, true, "更新页面后重试", exception));
+        }
     }
 
     private static JsonElement SelectData(JsonElement root)
@@ -86,6 +104,7 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
         var index = 0;
         foreach (var item in array.EnumerateArray())
         {
+            if (item.ValueKind != JsonValueKind.Object) continue;
             var urls = ParseUrls(item, "base_url", "baseUrl");
             var backupUrls = ParseUrls(item, "backup_url", "backupUrl");
             urls = urls.Concat(backupUrls).GroupBy(candidate => candidate.Url, StringComparer.Ordinal).Select(group => group.First()).ToList();
@@ -99,8 +118,8 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
                 QualityId = quality,
                 CodecId = codecId,
                 Codec = GetString(item, "codecs") ?? GetString(item, "codec") ?? CodecName(codecId),
-                Size = GetInt64(item, "size"),
-                DurationSeconds = GetDouble(item, "duration") is double duration ? duration / 1000 : null,
+                Size = GetInt64(item, "size") is long size && size > 0 ? size : null,
+                DurationSeconds = GetDouble(item, "duration") is double duration && duration > 0 ? duration / 1000 : null,
                 Urls = urls
             });
             index++;
@@ -110,12 +129,16 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
     private static List<MediaUrlCandidate> ParseUrls(JsonElement element, params string[] primaryNames)
     {
         var urls = new List<MediaUrlCandidate>();
+        if (element.ValueKind != JsonValueKind.Object) return urls;
         foreach (var name in primaryNames)
         {
-            if (element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString())) urls.Add(new MediaUrlCandidate(value.GetString()!));
+            if (element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String && TryCreateMediaCandidate(value.GetString(), out var candidate)) urls.Add(candidate);
             if (element.TryGetProperty(name, out value) && value.ValueKind == JsonValueKind.Array)
             {
-                urls.AddRange(value.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => new MediaUrlCandidate(item.GetString()!)).Where(item => !string.IsNullOrWhiteSpace(item.Url)));
+                foreach (var item in value.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String && TryCreateMediaCandidate(item.GetString(), out candidate)) urls.Add(candidate);
+                }
             }
         }
         return urls;
@@ -124,11 +147,12 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
     private static QualityOption[] ParseQualityOptions(JsonElement data)
     {
         var ids = data.TryGetProperty("accept_quality", out var quality) && quality.ValueKind == JsonValueKind.Array ? quality.EnumerateArray().Where(item => item.TryGetInt32(out _)).Select(item => item.GetInt32()).ToArray() : [];
-        var descriptions = data.TryGetProperty("accept_description", out var description) && description.ValueKind == JsonValueKind.Array ? description.EnumerateArray().Select(item => item.GetString() ?? "未知清晰度").ToArray() : [];
+        var descriptions = data.TryGetProperty("accept_description", out var description) && description.ValueKind == JsonValueKind.Array ? description.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() ?? "未知清晰度" : "未知清晰度").ToArray() : [];
         if (data.TryGetProperty("support_formats", out var formats) && formats.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in formats.EnumerateArray())
             {
+                if (item.ValueKind != JsonValueKind.Object) continue;
                 var id = GetInt32(item, "quality");
                 if (id is null || ids.Contains(id.Value)) continue;
                 ids = [.. ids, id.Value];
@@ -141,7 +165,7 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
     private static CodecOption[] ParseCodecOptions(JsonElement data)
     {
         if (!data.TryGetProperty("support_formats", out var formats) || formats.ValueKind != JsonValueKind.Array) return [];
-        return formats.EnumerateArray().Select(item => new CodecOption(GetInt32(item, "new_id") ?? GetInt32(item, "quality") ?? 0, GetString(item, "codecs") ?? GetString(item, "format") ?? "Auto")).Where(item => item.Id != 0).DistinctBy(item => item.Id).ToArray();
+        return formats.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object).Select(item => new CodecOption(GetInt32(item, "new_id") ?? GetInt32(item, "quality") ?? 0, GetString(item, "codecs") ?? GetString(item, "format") ?? "Auto")).Where(item => item.Id != 0).DistinctBy(item => item.Id).ToArray();
     }
 
     private static AppError ToError(long code, string? message) => code switch
@@ -164,24 +188,32 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
     };
 
     private static string? CodecName(int? id) => id switch { 7 => "AVC", 12 => "HEVC", 13 => "AV1", _ => null };
-    private static string? GetString(JsonElement element, string property) => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    private static bool TryCreateMediaCandidate(string? value, out MediaUrlCandidate candidate)
+    {
+        candidate = null!;
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 16_384 || !Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") || string.IsNullOrWhiteSpace(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo)) return false;
+        candidate = new MediaUrlCandidate(uri.ToString());
+        return true;
+    }
+
+    private static string? GetString(JsonElement element, string property) => element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     private static long? GetInt64(JsonElement element, string property)
     {
-        if (!element.TryGetProperty(property, out var value)) return null;
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var value)) return null;
         if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number)) return number;
         return value.ValueKind == JsonValueKind.String && long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var text) ? text : null;
     }
 
     private static int? GetInt32(JsonElement element, string property)
     {
-        if (!element.TryGetProperty(property, out var value)) return null;
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var value)) return null;
         if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)) return number;
         return value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var text) ? text : null;
     }
 
     private static double? GetDouble(JsonElement element, string property)
     {
-        if (!element.TryGetProperty(property, out var value)) return null;
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var value)) return null;
         if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number)) return number;
         return value.ValueKind == JsonValueKind.String && double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var text) ? text : null;
     }

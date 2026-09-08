@@ -6,7 +6,16 @@ public enum MediaDetectionState { Idle, WaitingForPageContext, Observing, Candid
 public enum UpdateChannel { Stable, Preview }
 
 public sealed record BrowserCookie(string Name, string Value, string Domain, string Path, DateTimeOffset? Expires, bool IsHttpOnly, bool IsSecure);
-public sealed record PageIdentity(string PageUrl, string? Bvid, long? Aid, long? Cid, long? EpisodeId, long NavigationGeneration);
+public sealed record PageIdentity(
+    string PageUrl,
+    string? Bvid,
+    long? Aid,
+    long? Cid,
+    long? EpisodeId,
+    long NavigationGeneration,
+    string? Title = null,
+    string? EpisodeTitle = null,
+    bool IsBangumi = false);
 public sealed record MediaFingerprint(string PageUrl, string? Bvid, long? Aid, long? Cid, long? EpisodeId, int? QualityId, string? Codec, long NavigationGeneration);
 public sealed record DetectionDiagnostic(string EventCode, MediaDetectionState State, DateTimeOffset Timestamp, string? Detail = null);
 
@@ -29,7 +38,17 @@ public interface IBilibiliEndpointProvider { Uri GetPlayUrlEndpoint(PageIdentity
 public interface IBilibiliSessionAdapter { Task<IReadOnlyDictionary<string, string>> GetRequestCookiesAsync(CancellationToken cancellationToken); }
 public interface IBilibiliUrlResolver { bool TryResolve(string input, out Uri uri); }
 public interface IMediaDetectionStrategy { string Name { get; } Task<MediaDetectionResult> TryResolveAsync(PageIdentity page, CancellationToken cancellationToken); }
-public interface IMediaDetectionCoordinator { event EventHandler<MediaDetectionSnapshot>? StateChanged; MediaDetectionSnapshot Snapshot { get; } long BeginNavigation(Uri uri); Task ObserveAsync(PlayUrlObservation observation, CancellationToken cancellationToken = default); Task DetectAsync(CancellationToken cancellationToken = default); void Reset(); }
+public interface IMediaDetectionCoordinator
+{
+    event EventHandler<MediaDetectionSnapshot>? StateChanged;
+    MediaDetectionSnapshot Snapshot { get; }
+    long BeginNavigation(Uri uri);
+    long UpdatePageContext(PageIdentity page);
+    bool TryAcceptResult(long generation, MediaDetectionResult result);
+    Task ObserveAsync(PlayUrlObservation observation, CancellationToken cancellationToken = default);
+    Task DetectAsync(CancellationToken cancellationToken = default);
+    void Reset();
+}
 public sealed record MediaDetectionResult(bool Success, MediaDetectionState State, MediaFingerprint? Fingerprint, object? Media, string? ErrorCode = null);
 public sealed record MediaDetectionSnapshot(MediaDetectionState State, PageIdentity? Page, MediaFingerprint? Fingerprint, object? Media, string? ErrorCode, IReadOnlyList<DetectionDiagnostic> Diagnostics);
 

@@ -6,4 +6,7 @@
     <AssemblyName>NovaClip.Updater</AssemblyName>
     <PublishSingleFile>false</PublishSingleFile>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NovaClip.Core\NovaClip.Core.csproj" />
+  </ItemGroup>
 </Project>

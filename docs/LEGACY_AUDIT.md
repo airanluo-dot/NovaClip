@@ -1,16 +1,21 @@
-# Legacy UI audit
+# Legacy audit
 
-## Reusable and retained
+The beta.7 source of truth is the `NovaClip.*` tree. The retired `BiliNative.sln`, `src/BiliNative.*`, and `tests/BiliNative.*` trees are removed from the repository and are blocked by the architecture gate.
 
-- Range downloader, retry executor, download state machine, SQLite repositories.
-- DASH/DURL normalization fixtures and parser behavior.
-- FFmpeg process execution and update-feed parsing, behind new boundaries.
+## Reused behavior
 
-## Replaced in beta.4
+- filename sanitization, semantic versioning, state-machine rules and retry policy;
+- DASH/DURL fixtures and candidate URL normalization;
+- streaming Range download, SQLite persistence and native FFmpeg process boundaries.
 
-- `BiliNative.App` navigation, pages, service composition, hard-coded UI strings.
-- Browser behavior that did not handle new windows, navigation policy, process failure, loading, title, history, or SPA generations.
-- Free-form concurrency/retry/path settings and Save All behavior.
-- Dynamic C# construction of `MainWindow`, which had been used to bypass XAML/PRI failures.
+## Deliberately not reused
 
-The `BiliNative.*` tree remains temporarily as read-only migration reference. `NovaClip.slnx`, CI, packaging, and release automation only build the `NovaClip.*` tree.
+- the legacy UI composition and code-behind;
+- browser navigation and response-observer wiring;
+- unbounded or browser-memory media writes;
+- the legacy update replacement path;
+- reference-extension JavaScript, UI, remote notice iframe or FFmpeg WASM.
+
+## On-disk compatibility
+
+A previously interrupted legacy task may still be discovered under a `.bilinative` task root so it can be migrated or safely completed. This is read-only compatibility behavior. Beta.7 creates task state under `.novaclip`, and no legacy source project or solution participates in builds, packaging or release automation.

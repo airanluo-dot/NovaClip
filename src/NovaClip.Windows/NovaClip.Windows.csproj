@@ -6,6 +6,5 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\NovaClip.Contracts\NovaClip.Contracts.csproj" />
-    <PackageReference Include="Microsoft.Web.WebView2" />
   </ItemGroup>
 </Project>

@@ -1,17 +1,21 @@
-# Status — 1.0.0-beta.5 Startup Reliability Fix
+# Status — 1.0.0-beta.7 Remediation and Safety Baseline
 
-Development branch: `refactor/beta.4-native-rebuild`.
+Development branch: `codex/nova-clip-1.0.0-beta.7-remediation`.
 
-## Implemented
+## Completed implementation scope
 
-- New `NovaClip.Contracts`, `Core`, `Bilibili`, `Infrastructure`, `Windows`, `App`, and `Updater` boundaries.
-- XAML-based WinUI 3 shell with Mica, native title bar, NavigationView and native Settings entry.
-- Single-window WebView2 navigation policy, complete navigation events, process-failure reporting, SPA generation isolation, and friendly BV/av/ep/ss address input.
-- Media detection state machine, fingerprints, deduplication, bounded diagnostics and stale-navigation rejection.
-- Typed immediate-save settings with RadioButtons, ComboBox, ToggleSwitch and native file/folder pickers.
-- `zh-CN` and `en-US` resources with parity and hard-coded-string CI gates.
-- Windows packaging for portable ZIP and Inno Setup installer.
+- Durable task state, atomic manifest/resume writes, SQLite ordered migrations/backups, history keyset pagination and outbox replay.
+- Lifecycle-owned DownloadManager with per-run cancellation disposal, graceful drain and output reservation/reclaim.
+- DASH and DURL production paths, staging-only FFmpeg merge and final output commit.
+- Browser navigation generation, SPA identity propagation, deduplication and single-instance URL activation.
+- Strict setup/portable update selection, mandatory GitHub digest, signed manifest/key ID, bounded package extraction and journaled rollback.
+- Immediate-save settings with schema 4 migration, runtime apply and rollback.
+- Bounded structured startup diagnostics, redaction, UI progress coalescing and page subscription cleanup.
+- Centrally pinned packages, pinned Actions, stable SDK/language settings, architecture/localization/dependency gates and version-derived packaging.
+- The retired BiliNative source tree is excluded from the beta.7 production solution and release path.
 
-## Release gate
+## Acceptance evidence
 
-GitHub Actions must compile and test the solution, verify localization and dependency rules, publish `resources.pri` and XBF resources, launch the packaged executable, construct every top-level page, and observe `App.StartupCompleted` plus every `Page.Ready` marker. A beta.5 tag is not created until those checks are green.
+Cross-platform and Windows workflows are defined in `.github/workflows/ci.yml` and `.github/workflows/windows-build.yml`. High-risk tests cover concurrent output names, stale reservations, Range validator changes, DURL/DASH manager completion, SQLite migration/recovery, signed update manifests, package extraction and updater rollback.
+
+Windows CI remains the release gate for WinUI compilation, resources.pri, real executable startup markers, page construction, portable packaging and Inno Setup output. A public tag/release is valid only after that gate is green.

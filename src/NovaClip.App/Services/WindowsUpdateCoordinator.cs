@@ -1,82 +1,264 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.IO.Compression;
+using System.Security.Cryptography;
 using NovaClip.Core;
 using NovaClip.Infrastructure;
 
 namespace NovaClip.App;
 
-public sealed class WindowsUpdateCoordinator
+public sealed class WindowsUpdateCoordinator : IDisposable
 {
+    private const int MaxSignedManifestCharacters = 1_000_000;
+    private const int MaxSignatureCharacters = 16_384;
     private readonly IUpdateService _updateService;
     private readonly WindowsSettingsStore _settings;
+    private readonly string _trustedPublicKeyPem;
+    private readonly SemaphoreSlim _applyGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetime = new();
+    private int _disposed;
 
-    public WindowsUpdateCoordinator(IUpdateService updateService, WindowsSettingsStore settings)
+    public WindowsUpdateCoordinator(
+        IUpdateService updateService,
+        WindowsSettingsStore settings,
+        string? trustedPublicKeyPem = null)
     {
-        _updateService = updateService;
-        _settings = settings;
+        _updateService = updateService ?? throw new ArgumentNullException(nameof(updateService));
+        _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _trustedPublicKeyPem = string.IsNullOrWhiteSpace(trustedPublicKeyPem)
+            ? SignedUpdateTrustPolicy.PublicKeyPem
+            : trustedPublicKeyPem;
     }
 
     public AppUpdateInfo? LatestUpdate { get; private set; }
     public event EventHandler<AppUpdateInfo>? UpdateAvailable;
 
+    public void Stop()
+    {
+        _lifetime.Cancel();
+    }
+
     public async Task<AppUpdateInfo?> CheckAsync(CancellationToken cancellationToken = default)
     {
-        LatestUpdate = await _updateService.CheckForUpdateAsync(AppServices.CurrentVersion, _settings.UpdateChannel, cancellationToken).ConfigureAwait(false);
-        if (LatestUpdate is not null) UpdateAvailable?.Invoke(this, LatestUpdate);
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
+        LatestUpdate = await _updateService.CheckForUpdateAsync(AppServices.CurrentVersion, _settings.UpdateChannel, linked.Token).ConfigureAwait(false);
+        if (LatestUpdate is not null)
+        {
+            try { UpdateAvailable?.Invoke(this, LatestUpdate); }
+            catch (Exception exception) { StartupDiagnostics.Warning("Update notification failed.", exception); }
+        }
+
         return LatestUpdate;
     }
 
-    public async Task CheckSilentlyAsync()
+    public async Task CheckSilentlyAsync(CancellationToken cancellationToken = default)
     {
-        if (!_settings.AutoCheckUpdates) return;
-        try { await CheckAsync().ConfigureAwait(false); }
+        if (!_settings.AutoCheckUpdates || _lifetime.IsCancellationRequested) return;
+        try { await CheckAsync(cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested || cancellationToken.IsCancellationRequested) { }
         catch (Exception exception) { StartupDiagnostics.Warning("Silent update check failed.", exception); }
     }
 
-    public async Task<bool> DownloadAndApplyAsync(AppUpdateInfo update, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
+    public async Task<bool> DownloadAndApplyAsync(
+        AppUpdateInfo update,
+        IProgress<double>? progress = null,
+        CancellationToken cancellationToken = default)
     {
-        var usePortable = AppServices.IsPortableInstall;
-        var asset = usePortable ? update.PortableAsset ?? update.SetupAsset : update.SetupAsset ?? update.PortableAsset;
-        if (asset is null) return false;
+        ArgumentNullException.ThrowIfNull(update);
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        if (!await _applyGate.WaitAsync(0, cancellationToken).ConfigureAwait(false)) return false;
 
-        var updater = Path.Combine(AppContext.BaseDirectory, "NovaClip.Updater.exe");
-        if (!File.Exists(updater)) return false;
-
-        var tempRoot = Path.Combine(Path.GetTempPath(), "NovaClip", update.Version);
-        Directory.CreateDirectory(tempRoot);
-        var downloadedPath = Path.Combine(tempRoot, asset.Name);
-        await _updateService.DownloadAssetAsync(asset, downloadedPath, progress, cancellationToken).ConfigureAwait(false);
-
-        var info = new ProcessStartInfo(updater)
+        var tempRoot = Path.Combine(Path.GetTempPath(), "NovaClip", "updates", Guid.NewGuid().ToString("N"));
+        var handedOff = false;
+        try
         {
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        info.ArgumentList.Add("--pid");
-        info.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
+            var usePortable = AppServices.IsPortableInstall;
+            var packageType = usePortable ? "portable" : "setup";
+            var asset = usePortable ? update.PortableAsset : update.SetupAsset;
+            if (asset is null || !IsExpectedPackageAsset(asset, packageType)) return false;
 
-        if (usePortable && asset.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-        {
-            var extracted = Path.Combine(tempRoot, "extracted");
-            if (Directory.Exists(extracted)) Directory.Delete(extracted, true);
-            ZipFile.ExtractToDirectory(downloadedPath, extracted);
-            info.ArgumentList.Add("--source");
-            info.ArgumentList.Add(extracted);
-            info.ArgumentList.Add("--target");
-            info.ArgumentList.Add(AppContext.BaseDirectory);
+            var updater = Path.Combine(AppContext.BaseDirectory, "NovaClip.Updater.exe");
+            if (!File.Exists(updater)) return false;
+
+            Directory.CreateDirectory(tempRoot);
+            var downloadedPath = Path.Combine(tempRoot, asset.Name);
+            await VerifySignedReleaseAsync(update, asset, packageType, tempRoot, progress, linked.Token).ConfigureAwait(false);
+            await _updateService.DownloadAssetAsync(asset, downloadedPath, progress, linked.Token).ConfigureAwait(false);
+
+            var info = new ProcessStartInfo(updater)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = AppContext.BaseDirectory
+            };
+            info.ArgumentList.Add("--pid");
+            info.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+
+            if (usePortable)
+            {
+                var extracted = Path.Combine(tempRoot, "extracted");
+                Directory.CreateDirectory(extracted);
+                await PortablePackageExtractor.ExtractAsync(downloadedPath, extracted, linked.Token).ConfigureAwait(false);
+                PortablePackageExtractor.ValidateApplicationFiles(extracted);
+                info.ArgumentList.Add("--source");
+                info.ArgumentList.Add(extracted);
+                info.ArgumentList.Add("--target");
+                info.ArgumentList.Add(AppContext.BaseDirectory);
+            }
+            else
+            {
+                info.ArgumentList.Add("--installer");
+                info.ArgumentList.Add(downloadedPath);
+                info.ArgumentList.Add("--target");
+                info.ArgumentList.Add(AppContext.BaseDirectory);
+            }
+
+            info.ArgumentList.Add("--restart");
+            info.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "NovaClip.exe"));
+
+            await AppServices.PrepareForUpdateAsync(linked.Token).ConfigureAwait(true);
+            if (Process.Start(info) is null) return false;
+            handedOff = true;
+            App.MainWindow?.DispatcherQueue.TryEnqueue(() => App.MainWindow.Close());
+            StartupDiagnostics.Info($"Update handoff completed: version={update.Version}, package={packageType}.");
+            return true;
         }
-        else
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetime.IsCancellationRequested)
         {
-            info.ArgumentList.Add("--installer");
-            info.ArgumentList.Add(downloadedPath);
+            return false;
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Warning($"Update rejected or failed before handoff: version={update.Version}.", exception);
+            return false;
+        }
+        finally
+        {
+            if (!handedOff) TryDeleteDirectory(tempRoot);
+            _applyGate.Release();
+        }
+    }
+
+    private async Task VerifySignedReleaseAsync(
+        AppUpdateInfo update,
+        AppUpdateAsset selectedAsset,
+        string packageType,
+        string tempRoot,
+        IProgress<double>? progress,
+        CancellationToken cancellationToken)
+    {
+        var manifestAsset = update.SignedManifestAsset;
+        var signatureAsset = update.SignedManifestSignatureAsset;
+        if (manifestAsset is null || signatureAsset is null)
+        {
+            throw new InvalidDataException("更新发布缺少签名清单或签名文件，已拒绝执行。");
         }
 
-        info.ArgumentList.Add("--restart");
-        info.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "NovaClip.exe"));
+        if (manifestAsset.Size is not long manifestSize ||
+            manifestSize <= 0 ||
+            manifestSize > MaxSignedManifestCharacters ||
+            signatureAsset.Size is not long signatureSize ||
+            signatureSize <= 0 ||
+            signatureSize > MaxSignatureCharacters)
+        {
+            throw new InvalidDataException("签名清单大小声明无效，已拒绝执行。");
+        }
 
-        if (Process.Start(info) is null) return false;
-        App.MainWindow?.Close();
-        return true;
+        var manifestPath = Path.Combine(tempRoot, manifestAsset.Name);
+        var signaturePath = Path.Combine(tempRoot, signatureAsset.Name);
+        await _updateService.DownloadAssetAsync(manifestAsset, manifestPath, progress, cancellationToken).ConfigureAwait(false);
+        await _updateService.DownloadAssetAsync(signatureAsset, signaturePath, progress, cancellationToken).ConfigureAwait(false);
+
+        var manifestJson = await File.ReadAllTextAsync(manifestPath, cancellationToken).ConfigureAwait(false);
+        var signature = await File.ReadAllTextAsync(signaturePath, cancellationToken).ConfigureAwait(false);
+        if (manifestJson.Length > MaxSignedManifestCharacters || signature.Length > MaxSignatureCharacters)
+        {
+            throw new InvalidDataException("签名清单大小超过安全上限，已拒绝执行。");
+        }
+
+        if (!SignedUpdateManifestVerifier.Verify(
+                manifestJson,
+                signature.Trim(),
+                _trustedPublicKeyPem,
+                out var manifest,
+                out var error))
+        {
+            throw new InvalidDataException(error ?? "签名清单验证失败，已拒绝执行。");
+        }
+
+        var expectedChannel = update.IsPrerelease ? "preview" : "stable";
+        if (!SemanticVersion.TryParse(update.Version, out var updateVersion) ||
+            !SemanticVersion.TryParse(manifest!.Version, out var manifestVersion) ||
+            updateVersion.CompareTo(manifestVersion) != 0 ||
+            !string.Equals(manifest.Channel, expectedChannel, StringComparison.Ordinal) ||
+            !string.Equals(manifest.KeyId, SignedUpdateTrustPolicy.KeyId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("签名清单版本或发布通道不匹配，已拒绝执行。");
+        }
+
+        var signedAsset = manifest.Assets.FirstOrDefault(item =>
+            string.Equals(item.Name, selectedAsset.Name, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.RuntimeIdentifier, "win-x64", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.PackageType, packageType, StringComparison.OrdinalIgnoreCase));
+        var expectedDigest = GitHubReleaseUpdateService.ParseSha256Digest(selectedAsset.Digest);
+        if (signedAsset is null ||
+            selectedAsset.Size is not long selectedSize ||
+            expectedDigest is null ||
+            signedAsset.Size != selectedSize ||
+            !CryptographicOperations.FixedTimeEquals(
+                Convert.FromHexString(signedAsset.Sha256),
+                expectedDigest))
+        {
+            throw new InvalidDataException("签名清单中的更新资产与 GitHub Release 资产不匹配，已拒绝执行。");
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+            // The temporary update directory is safe to retry on the next cleanup sweep.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The temporary update directory is safe to retry on the next cleanup sweep.
+        }
+    }
+
+    private static bool IsExpectedPackageAsset(AppUpdateAsset asset, string packageType)
+    {
+        if (!IsSafeAssetName(asset.Name)) return false;
+        var expectedSuffix = packageType == "portable" ? "-portable.zip" : "-setup.exe";
+        if (!asset.Name.EndsWith(expectedSuffix, StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrWhiteSpace(asset.ContentType)) return true;
+
+        var contentType = asset.ContentType.Trim();
+        return packageType == "portable"
+            ? contentType.Equals("application/zip", StringComparison.OrdinalIgnoreCase) ||
+              contentType.Equals("application/x-zip-compressed", StringComparison.OrdinalIgnoreCase) ||
+              contentType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase)
+            : contentType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase) ||
+              contentType.Equals("application/x-msdownload", StringComparison.OrdinalIgnoreCase) ||
+              contentType.Equals("application/vnd.microsoft.portable-executable", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSafeAssetName(string name) =>
+        !string.IsNullOrWhiteSpace(name) &&
+        name is not "." and not ".." &&
+        Path.GetFileName(name) == name &&
+        name.IndexOfAny(['/', '\\', '\0']) < 0;
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+        _applyGate.Dispose();
+        GC.SuppressFinalize(this);
     }
 }
