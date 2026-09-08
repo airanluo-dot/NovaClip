@@ -6,7 +6,7 @@ namespace NovaClip.Infrastructure;
 
 public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHistoryRepository, IDurableObligationStore, IDisposable
 {
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
     private const int DefaultPageSize = 200;
     private readonly string _connectionString;
     private readonly SemaphoreSlim _writeGate = new(1, 1);
@@ -47,6 +47,7 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
                         PageUrl TEXT NOT NULL,
                         Title TEXT NOT NULL,
                         Status INTEGER NOT NULL,
+                        OperationState INTEGER NOT NULL DEFAULT 0,
                         CreatedAt TEXT NOT NULL,
                         UpdatedAt TEXT NOT NULL,
                         OutputPath TEXT NOT NULL,
@@ -98,6 +99,13 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
                     CREATE INDEX IF NOT EXISTS IX_DownloadHistory_UpdatedAt_Id ON DownloadHistory (UpdatedAt DESC, Id DESC);
                     CREATE INDEX IF NOT EXISTS IX_DurableObligations_Pending ON DurableObligations (CompletedAt, UpdatedAt);
                     """, token).ConfigureAwait(false);
+                await SetSchemaVersionAsync(connection, transaction, 2, token).ConfigureAwait(false);
+            }
+
+            if (version < 3)
+            {
+                await EnsureColumnAsync(connection, transaction, "DownloadTasks", "OperationState", "INTEGER NOT NULL DEFAULT 0", token).ConfigureAwait(false);
+                await EnsureColumnAsync(connection, transaction, "DownloadHistory", "OperationState", "INTEGER NOT NULL DEFAULT 0", token).ConfigureAwait(false);
                 await SetSchemaVersionAsync(connection, transaction, CurrentSchemaVersion, token).ConfigureAwait(false);
             }
 
@@ -215,12 +223,13 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
             await using var connection = await OpenAsync(token).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
             command.CommandText = $"""
-                INSERT INTO {table} (Id, PageUrl, Title, Status, CreatedAt, UpdatedAt, OutputPath, SelectedQualityId, SelectedCodec, ErrorCode, ErrorMessage, DownloadedBytes, TotalBytes, RunId)
-                VALUES ($id, $pageUrl, $title, $status, $createdAt, $updatedAt, $outputPath, $quality, $codec, $errorCode, $errorMessage, $downloaded, $total, $runId)
+                INSERT INTO {table} (Id, PageUrl, Title, Status, OperationState, CreatedAt, UpdatedAt, OutputPath, SelectedQualityId, SelectedCodec, ErrorCode, ErrorMessage, DownloadedBytes, TotalBytes, RunId)
+                VALUES ($id, $pageUrl, $title, $status, $operationState, $createdAt, $updatedAt, $outputPath, $quality, $codec, $errorCode, $errorMessage, $downloaded, $total, $runId)
                 ON CONFLICT(Id) DO UPDATE SET
                     PageUrl = excluded.PageUrl,
                     Title = excluded.Title,
                     Status = excluded.Status,
+                    OperationState = excluded.OperationState,
                     UpdatedAt = excluded.UpdatedAt,
                     OutputPath = excluded.OutputPath,
                     SelectedQualityId = excluded.SelectedQualityId,
@@ -241,7 +250,7 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
         ValidateTableName(table);
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT Id, PageUrl, Title, Status, CreatedAt, UpdatedAt, OutputPath, SelectedQualityId, SelectedCodec, ErrorCode, ErrorMessage, DownloadedBytes, TotalBytes, RunId FROM {table} WHERE Id = $id";
+        command.CommandText = $"SELECT Id, PageUrl, Title, Status, OperationState, CreatedAt, UpdatedAt, OutputPath, SelectedQualityId, SelectedCodec, ErrorCode, ErrorMessage, DownloadedBytes, TotalBytes, RunId FROM {table} WHERE Id = $id";
         command.Parameters.AddWithValue("$id", id.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadSnapshot(reader) : null;
@@ -320,26 +329,29 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
         try
         {
             if (!Guid.TryParse(reader.GetString(0), out var id) ||
-                !DateTimeOffset.TryParse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var createdAt) ||
-                !DateTimeOffset.TryParse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt)) return null;
+                !DateTimeOffset.TryParse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var createdAt) ||
+                !DateTimeOffset.TryParse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt)) return null;
             var stateValue = reader.GetInt32(3);
             var state = Enum.IsDefined(typeof(DownloadTaskState), stateValue) ? (DownloadTaskState)stateValue : DownloadTaskState.Failed;
+            var operationValue = reader.GetInt32(4);
+            var operationState = Enum.IsDefined(typeof(DurableOperationState), operationValue) ? (DurableOperationState)operationValue : DurableOperationState.Failed;
             return new DownloadTaskSnapshot
             {
                 Id = id,
                 PageUrl = reader.GetString(1),
                 Title = reader.GetString(2),
                 State = state,
+                OperationState = operationState,
                 CreatedAt = createdAt,
                 UpdatedAt = updatedAt,
-                OutputPath = reader.GetString(6),
-                SelectedQualityId = reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                SelectedCodec = reader.IsDBNull(8) ? null : reader.GetString(8),
-                ErrorCode = reader.IsDBNull(9) ? null : reader.GetString(9),
-                ErrorMessage = reader.IsDBNull(10) ? null : reader.GetString(10),
-                DownloadedBytes = Math.Max(0, reader.GetInt64(11)),
-                TotalBytes = reader.IsDBNull(12) ? null : reader.GetInt64(12),
-                RunId = reader.IsDBNull(13) ? 0 : Math.Max(0, reader.GetInt64(13))
+                OutputPath = reader.GetString(7),
+                SelectedQualityId = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                SelectedCodec = reader.IsDBNull(9) ? null : reader.GetString(9),
+                ErrorCode = reader.IsDBNull(10) ? null : reader.GetString(10),
+                ErrorMessage = reader.IsDBNull(11) ? null : reader.GetString(11),
+                DownloadedBytes = Math.Max(0, reader.GetInt64(12)),
+                TotalBytes = reader.IsDBNull(13) ? null : reader.GetInt64(13),
+                RunId = reader.IsDBNull(14) ? 0 : Math.Max(0, reader.GetInt64(14))
             };
         }
         catch (Exception exception) when (exception is FormatException or InvalidCastException or IndexOutOfRangeException or OverflowException)

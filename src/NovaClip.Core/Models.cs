@@ -157,6 +157,7 @@ public sealed record DownloadTaskSnapshot
     public required string PageUrl { get; init; }
     public required string Title { get; init; }
     public required DownloadTaskState State { get; init; }
+    public DurableOperationState OperationState { get; init; } = DurableOperationState.Preparing;
     public required DateTimeOffset CreatedAt { get; init; }
     public required DateTimeOffset UpdatedAt { get; init; }
     public required string OutputPath { get; init; }

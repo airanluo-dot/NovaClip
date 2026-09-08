@@ -71,6 +71,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 PageUrl = request.Media.PageUrl,
                 Title = request.Media.Title,
                 State = DownloadTaskState.Queued,
+                OperationState = DurableOperationState.Preparing,
                 CreatedAt = now,
                 UpdatedAt = now,
                 OutputPath = reservation.OutputPath,
@@ -327,6 +328,8 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             await _engine.DownloadAsync(work.Request, progress, run.StopSource.Token).ConfigureAwait(false);
             var taskRoot = HttpRangeDownloader.GetTaskRoot(work.Request.OutputDirectory, work.Request.TaskId);
 
+            if (!await SetStateAsync(work, DownloadTaskState.Finalizing, run.RunId).ConfigureAwait(false)) return;
+
             if (work.Request.MergeAfterDownload && work.Request.VideoTrack is not null && work.Request.AudioTrack is not null)
             {
                 if (_ffmpeg is null) throw new InvalidOperationException("FFmpeg service is not configured.");
@@ -371,13 +374,18 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 await CommitPrimaryAsync(work, staging, run.StopSource.Token).ConfigureAwait(false);
             }
 
-            if (!await SetStateAsync(work, DownloadTaskState.Finalizing, run.RunId).ConfigureAwait(false)) return;
             if (work.Request.DeleteTemporaryFilesAfterMerge)
             {
-                await CleanupTaskRootAsync(work, DurableObligationKind.TemporaryCleanup).ConfigureAwait(false);
+                var cleanupCompleted = await CleanupTaskRootAsync(work, DurableObligationKind.TemporaryCleanup).ConfigureAwait(false);
+                if (!cleanupCompleted)
+                {
+                    await SetStateIfCurrentAsync(work, DownloadTaskState.Completed, run.RunId).ConfigureAwait(false);
+                    await SetOperationStateAsync(work, DurableOperationState.CleanupPending, run.RunId).ConfigureAwait(false);
+                }
             }
 
-            if (!await SetStateAsync(work, DownloadTaskState.Completed, run.RunId).ConfigureAwait(false)) return;
+            if (work.GetSnapshot().State != DownloadTaskState.Completed &&
+                !await SetStateAsync(work, DownloadTaskState.Completed, run.RunId).ConfigureAwait(false)) return;
             if (_history is not null)
             {
                 var completed = work.GetSnapshot();
@@ -447,7 +455,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         lock (work.Gate)
         {
             work.Reservation = committed;
-            work.Snapshot = work.Snapshot with { OutputPath = committed.OutputPath, UpdatedAt = DateTimeOffset.UtcNow };
+            work.Snapshot = work.Snapshot with { OutputPath = committed.OutputPath, OperationState = DurableOperationState.Committed, UpdatedAt = DateTimeOffset.UtcNow };
             snapshot = work.Snapshot;
         }
         Publish(snapshot);
@@ -483,12 +491,44 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 throw new InvalidOperationException($"Cannot transition task {work.Snapshot.Id} from {current} to {state}.");
             }
 
-            work.Snapshot = work.Snapshot with { State = state, UpdatedAt = DateTimeOffset.UtcNow };
+            var operationState = state switch
+            {
+                DownloadTaskState.Queued or DownloadTaskState.Resolving => DurableOperationState.Preparing,
+                DownloadTaskState.DownloadingVideo or DownloadTaskState.DownloadingAudio or DownloadTaskState.DownloadingSegments => DurableOperationState.Downloading,
+                DownloadTaskState.Merging or DownloadTaskState.Finalizing => DurableOperationState.Finalizing,
+                DownloadTaskState.Completed when work.Snapshot.OperationState != DurableOperationState.CleanupPending => DurableOperationState.Committed,
+                DownloadTaskState.Failed => DurableOperationState.Failed,
+                _ => work.Snapshot.OperationState
+            };
+            work.Snapshot = work.Snapshot with
+            {
+                State = state,
+                OperationState = operationState,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
             snapshot = work.Snapshot;
         }
         Publish(snapshot);
         await PersistCriticalAsync(snapshot).ConfigureAwait(false);
         return true;
+    }
+
+    private async Task SetOperationStateAsync(DownloadWork work, DurableOperationState operationState, long runId)
+    {
+        DownloadTaskSnapshot snapshot;
+        lock (work.Gate)
+        {
+            if (work.CurrentRun?.RunId != runId) return;
+            work.Snapshot = work.Snapshot with
+            {
+                OperationState = operationState,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            snapshot = work.Snapshot;
+        }
+
+        Publish(snapshot);
+        await PersistCriticalAsync(snapshot).ConfigureAwait(false);
     }
 
     private void Publish(DownloadTaskSnapshot snapshot)
@@ -509,17 +549,19 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         await CleanupTaskRootAsync(work, DurableObligationKind.TemporaryCleanup).ConfigureAwait(false);
     }
 
-    private async Task CleanupTaskRootAsync(DownloadWork work, DurableObligationKind kind)
+    private async Task<bool> CleanupTaskRootAsync(DownloadWork work, DurableObligationKind kind)
     {
         var root = HttpRangeDownloader.GetTaskRoot(work.Request.OutputDirectory, work.Request.TaskId);
-        if (!IsSafeTaskRoot(root)) return;
+        if (!IsSafeTaskRoot(root)) return false;
         try
         {
             if (Directory.Exists(root)) Directory.Delete(root, true);
+            return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             await EnqueueObligationAsync(kind, root, exception.Message).ConfigureAwait(false);
+            return false;
         }
     }
 
