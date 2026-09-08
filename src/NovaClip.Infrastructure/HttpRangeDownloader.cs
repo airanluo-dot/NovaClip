@@ -263,7 +263,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         var existingLength = File.Exists(destinationPath) ? new FileInfo(destinationPath).Length : 0L;
         var metadata = existingLength > 0 ? TryReadResumeMetadata(metadataPath) : null;
 
-        if (existingLength > 0 && (metadata is null || !string.Equals(metadata.Url, url.ToString(), StringComparison.Ordinal)))
+        if (existingLength > 0 && (metadata is null || !metadata.HasValidator || metadata.CandidateIndex != candidateIndex || !string.Equals(metadata.Url, url.ToString(), StringComparison.Ordinal)))
         {
             DeletePartial(destinationPath);
             existingLength = 0;
@@ -285,6 +285,11 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         }
 
         var append = existingLength > 0 && response.StatusCode == HttpStatusCode.PartialContent;
+        if (response.StatusCode == HttpStatusCode.PartialContent && !append)
+        {
+            throw new HttpRequestException("The server returned a partial response without a resumable partial file.", null, HttpStatusCode.PreconditionFailed);
+        }
+
         if (append)
         {
             if (response.Content.Headers.ContentRange?.From != existingLength)
@@ -373,15 +378,25 @@ public sealed class HttpRangeDownloader : IDownloadEngine
 
     private static bool ResponseMatchesMetadata(HttpResponseMessage response, ResumeMetadata metadata)
     {
-        if (!string.IsNullOrWhiteSpace(metadata.ETag) && response.Headers.ETag is { } etag)
+        if (!metadata.HasValidator) return false;
+
+        if (!string.IsNullOrWhiteSpace(metadata.ETag))
         {
-            return string.Equals(metadata.ETag, etag.Tag, StringComparison.Ordinal);
+            if (response.Headers.ETag is not { } etag ||
+                !string.Equals(metadata.ETag, etag.Tag, StringComparison.Ordinal))
+            {
+                return false;
+            }
         }
 
-        if (!string.IsNullOrWhiteSpace(metadata.LastModified) && response.Content.Headers.LastModified is { } lastModified &&
-            DateTimeOffset.TryParse(metadata.LastModified, out var expected))
+        if (!string.IsNullOrWhiteSpace(metadata.LastModified))
         {
-            return lastModified == expected;
+            if (response.Content.Headers.LastModified is not { } lastModified ||
+                !DateTimeOffset.TryParse(metadata.LastModified, out var expected) ||
+                lastModified != expected)
+            {
+                return false;
+            }
         }
 
         return true;
@@ -481,5 +496,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         if (track.Type != expectedType || string.IsNullOrWhiteSpace(track.TrackId) || track.Size is < 0 || track.DurationSeconds is < 0 || track.Urls is null || track.Urls.Count == 0 || track.Urls.Any(candidate => candidate is null || !TryCreateHttpUri(candidate.Url, out _))) throw new ArgumentException("The download request contains an invalid media track.", nameof(track));
     }
 
-    private sealed record ResumeMetadata(string Url, int CandidateIndex, string? ETag, string? LastModified, long? TotalLength);
+    private sealed record ResumeMetadata(string Url, int CandidateIndex, string? ETag, string? LastModified, long? TotalLength)
+    {
+        public bool HasValidator => !string.IsNullOrWhiteSpace(ETag) || !string.IsNullOrWhiteSpace(LastModified);
+    }
 }
