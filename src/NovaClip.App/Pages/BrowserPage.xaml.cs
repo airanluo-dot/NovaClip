@@ -264,7 +264,7 @@ public sealed partial class BrowserPage : Page
         }
     }
 
-    private void PersistLastPage(string? source)
+    private static void PersistLastPage(string? source)
     {
         if (!AppServices.IsInitialized ||
             !Uri.TryCreate(source, UriKind.Absolute, out var uri) ||
@@ -449,7 +449,7 @@ public sealed partial class BrowserPage : Page
         StartupDiagnostics.Info("MediaDetection.Ready");
     }
 
-    private static MediaTrack? SelectVideoTrack(IReadOnlyList<MediaTrack> tracks)
+    private static MediaTrack? SelectVideoTrack(List<MediaTrack> tracks)
     {
         if (tracks.Count == 0) return null;
 
