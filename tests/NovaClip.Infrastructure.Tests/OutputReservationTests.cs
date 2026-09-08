@@ -31,6 +31,50 @@ public sealed class OutputReservationTests
     }
 
     [Fact]
+    public async Task ReclaimsMarkerOwnedByExitedProcess()
+    {
+        var root = CreateRoot();
+        using var service = new OutputReservationService();
+        try
+        {
+            var output = Path.Combine(root, "same-title.mp4");
+            var marker = output + ".novaclip-reservation";
+            await File.WriteAllTextAsync(marker, Guid.NewGuid().ToString("D") + "|999999|" + DateTimeOffset.UtcNow.ToString("O"));
+
+            var reservation = await service.ReserveAsync(Guid.NewGuid(), root, "same-title.mp4");
+
+            Assert.Equal(output, reservation.OutputPath);
+            Assert.True(File.Exists(reservation.MarkerPath));
+            await service.ReleaseAsync(reservation);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task TreatsDirectoryAtOutputPathAsOccupied()
+    {
+        var root = CreateRoot();
+        using var service = new OutputReservationService();
+        try
+        {
+            var output = Path.Combine(root, "same-title.mp4");
+            Directory.CreateDirectory(output);
+
+            var reservation = await service.ReserveAsync(Guid.NewGuid(), root, "same-title.mp4");
+
+            Assert.NotEqual(output, reservation.OutputPath);
+            await service.ReleaseAsync(reservation);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task CommitNeverOverwritesAnExistingOutput()
     {
         var root = CreateRoot();
