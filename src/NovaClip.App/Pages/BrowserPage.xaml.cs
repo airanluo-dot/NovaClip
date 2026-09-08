@@ -43,7 +43,7 @@ public sealed partial class BrowserPage : Page
         InitializeComponent();
         Instance = this;
         _detector.StateChanged += Detector_StateChanged;
-        NavigationCacheMode = NavigationCacheMode.Required;
+        NavigationCacheMode = Microsoft.UI.Xaml.Navigation.NavigationCacheMode.Required;
         Loaded += BrowserPage_Loaded;
         Unloaded += BrowserPage_Unloaded;
     }
@@ -429,10 +429,9 @@ public sealed partial class BrowserPage : Page
                 FormatBytes(track.Size));
         }
 
-        if (videoTracks.Count > 0)
+        if (videoTracks.Count > 0 && SelectVideoTrack(videoTracks) is { } preferred)
         {
-            var preferred = SelectVideoTrack(videoTracks);
-            QualityCombo.SelectedIndex = Math.Max(0, videoTracks.IndexOf(preferred));
+            QualityCombo.SelectedIndex = videoTracks.IndexOf(preferred);
         }
 
         TitleText.Text = media.Title;
