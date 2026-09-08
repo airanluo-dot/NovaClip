@@ -4,11 +4,19 @@ using System.Text.Json;
 
 namespace NovaClip.App;
 
+public sealed class SingleInstanceActivationEventArgs : EventArgs
+{
+    public SingleInstanceActivationEventArgs(string? argument) => Argument = argument;
+
+    public string? Argument { get; }
+}
+
 public sealed class SingleInstanceCoordinator : IDisposable
 {
     private const string MutexName = "NovaClip.SingleInstance.v1";
     private const string PipeName = "NovaClip.SingleInstance.v1";
     private const int MaxCommandBytes = 16_384;
+    private const int MaxArgumentCharacters = 4_096;
     private readonly Mutex _mutex;
     private readonly CancellationTokenSource _stopSource = new();
     private readonly Task _serverTask;
@@ -20,34 +28,45 @@ public sealed class SingleInstanceCoordinator : IDisposable
         _serverTask = ListenAsync();
     }
 
-    public event EventHandler? ActivateRequested;
+    public event EventHandler<SingleInstanceActivationEventArgs>? ActivateRequested;
 
-    public static async Task<SingleInstanceCoordinator?> AcquireOrForwardAsync(CancellationToken cancellationToken = default)
+    public static async Task<SingleInstanceCoordinator?> AcquireOrForwardAsync(
+        string? argument = null,
+        CancellationToken cancellationToken = default)
     {
-        var mutex = new Mutex(initiallyOwned: false, MutexName, out var createdNew);
+        using var mutex = new Mutex(initiallyOwned: false, MutexName, out _);
         var ownsMutex = false;
         try
         {
             try { ownsMutex = mutex.WaitOne(0); }
             catch (AbandonedMutexException) { ownsMutex = true; }
 
-            if (ownsMutex) return new SingleInstanceCoordinator(mutex);
+            if (ownsMutex)
+            {
+                var ownedMutex = mutex;
+                GC.SuppressFinalize(ownedMutex);
+                return new SingleInstanceCoordinator(ownedMutex);
+            }
 
-            mutex.Dispose();
-            if (!await ForwardActivateAsync(cancellationToken).ConfigureAwait(false))
+            if (!await ForwardActivateAsync(argument, cancellationToken).ConfigureAwait(false))
             {
                 throw new InvalidOperationException("Another NovaClip instance is already running but did not accept the activation request.");
             }
+
             return null;
         }
         catch
         {
-            if (!ownsMutex) mutex.Dispose();
+            if (ownsMutex)
+            {
+                try { mutex.ReleaseMutex(); } catch (ApplicationException or ObjectDisposedException) { }
+            }
+
             throw;
         }
     }
 
-    private static async Task<bool> ForwardActivateAsync(CancellationToken cancellationToken)
+    private static async Task<bool> ForwardActivateAsync(string? argument, CancellationToken cancellationToken)
     {
         try
         {
@@ -57,7 +76,11 @@ public sealed class SingleInstanceCoordinator : IDisposable
             {
                 AutoFlush = true
             };
-            var payload = JsonSerializer.Serialize(new ActivationCommand("activate"));
+
+            var boundedArgument = string.IsNullOrWhiteSpace(argument)
+                ? null
+                : argument.Trim() is { Length: <= MaxArgumentCharacters } normalized ? normalized : null;
+            var payload = JsonSerializer.Serialize(new ActivationCommand("activate", boundedArgument));
             if (Encoding.UTF8.GetByteCount(payload) > MaxCommandBytes) return false;
             await writer.WriteLineAsync(payload).ConfigureAwait(false);
             return true;
@@ -84,10 +107,15 @@ public sealed class SingleInstanceCoordinator : IDisposable
                 using var reader = new StreamReader(server, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, 256, leaveOpen: false);
                 var command = await reader.ReadLineAsync().ConfigureAwait(false);
                 if (command is null || Encoding.UTF8.GetByteCount(command) > MaxCommandBytes) continue;
+
                 try
                 {
                     var activation = JsonSerializer.Deserialize<ActivationCommand>(command);
-                    if (activation?.Type == "activate") ActivateRequested?.Invoke(this, EventArgs.Empty);
+                    if (activation?.Type == "activate" &&
+                        (activation.Argument is null || activation.Argument.Length <= MaxArgumentCharacters))
+                    {
+                        ActivateRequested?.Invoke(this, new SingleInstanceActivationEventArgs(activation.Argument));
+                    }
                 }
                 catch (JsonException)
                 {
@@ -116,5 +144,5 @@ public sealed class SingleInstanceCoordinator : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private sealed record ActivationCommand(string Type);
+    private sealed record ActivationCommand(string Type, string? Argument);
 }
