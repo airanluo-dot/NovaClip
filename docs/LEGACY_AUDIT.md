@@ -1,6 +1,6 @@
 # Legacy audit
 
-The beta.7 source of truth is the \`NovaClip.*\` tree. The retired \`BiliNative.sln\`, \`src/BiliNative.*\`, and \`tests/BiliNative.*\` trees are removed from the repository and are blocked by the architecture gate.
+The beta.7 source of truth is the `NovaClip.*` tree. The retired `BiliNative.sln`, `src/BiliNative.*`, and `tests/BiliNative.*` trees are removed from the repository and are blocked by the architecture gate.
 
 ## Reused behavior
 
@@ -18,4 +18,4 @@ The beta.7 source of truth is the \`NovaClip.*\` tree. The retired \`BiliNative.
 
 ## On-disk compatibility
 
-A previously interrupted legacy task may still be discovered under a \`.bilinative\` task root so it can be migrated or safely completed. This is read-only compatibility behavior. Beta.7 creates task state under \`.novaclip\`, and no legacy source project or solution participates in builds, packaging or release automation.
+A previously interrupted legacy task may still be discovered under a `.bilinative` task root so it can be migrated or safely completed. This is read-only compatibility behavior. Beta.7 creates task state under `.novaclip`, and no legacy source project or solution participates in builds, packaging or release automation.

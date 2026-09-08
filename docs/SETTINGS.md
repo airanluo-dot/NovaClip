@@ -1,6 +1,6 @@
 # Settings
 
-Settings are typed, validated, versioned and saved atomically to \`%LocalAppData%\NovaClip\settings.json\`. Runtime/cache, database, browser and logs use separate locations.
+Settings are typed, validated, versioned and saved atomically to `%LocalAppData%\NovaClip\settings.json`. Runtime/cache, database, browser and logs use separate locations.
 
 - Booleans use ToggleSwitch.
 - Concurrency is restricted to RadioButtons 1, 2 or 3.

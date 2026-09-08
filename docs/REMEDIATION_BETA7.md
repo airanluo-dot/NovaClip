@@ -1,9 +1,9 @@
 # beta.7 remediation ledger
 
-- Baseline: \`2c38087d8a6f9af55abd7f1dc5f1ae5e11ed96dd\`
-- Working branch: \`codex/nova-clip-1.0.0-beta.7-remediation\`
-- Target version: \`1.0.0-beta.7\`
-- Production source: \`NovaClip.*\` solution and \`version.props\`
+- Baseline: `2c38087d8a6f9af55abd7f1dc5f1ae5e11ed96dd`
+- Working branch: `codex/nova-clip-1.0.0-beta.7-remediation`
+- Target version: `1.0.0-beta.7`
+- Production source: `NovaClip.*` solution and `version.props`
 
 | ID range | Closed by beta.7 |
 |---|---|

@@ -1,6 +1,6 @@
 # API surface
 
-\`NovaClip.Contracts\` is dependency-free and owns the service boundaries. Major groups are browser/session/navigation/tab/diagnostics, Bilibili context and detection strategies, downloads, FFmpeg/media processing, settings/migrations, localization, updates, and Windows OS adapters.
+`NovaClip.Contracts` is dependency-free and owns the service boundaries. Major groups are browser/session/navigation/tab/diagnostics, Bilibili context and detection strategies, downloads, FFmpeg/media processing, settings/migrations, localization, updates, and Windows OS adapters.
 
 The beta.7 production path uses the contracts for:
 
@@ -14,9 +14,9 @@ Future capability contracts remain available for batch/multipart media, subtitle
 
 Dependency direction:
 
-\`\`\`text
+```text
 NovaClip.App → NovaClip.Windows → NovaClip.Infrastructure / NovaClip.Bilibili
              → NovaClip.Core → NovaClip.Contracts
-\`\`\`
+```
 
-Rules are checked by \`scripts/check-architecture.ps1\`: Contracts cannot reference WinUI, WebView2, SQLite or FFmpeg; page code cannot construct \`HttpClient\`, write settings files directly or access SQLite; the retired \`BiliNative.*\` source tree must not return.
+Rules are checked by `scripts/check-architecture.ps1`: Contracts cannot reference WinUI, WebView2, SQLite or FFmpeg; page code cannot construct `HttpClient`, write settings files directly or access SQLite; the retired `BiliNative.*` source tree must not return.
