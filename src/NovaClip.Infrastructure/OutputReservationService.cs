@@ -54,6 +54,12 @@ public sealed class OutputReservationService : IOutputReservationService
                 // Retry the same candidate after a stale marker is removed.
                 if (TryReclaimStaleMarker(markerPath)) index--;
             }
+            catch (UnauthorizedAccessException) when (IsMarkerCollision(markerPath))
+            {
+                // Windows may report a sharing conflict on a marker as access denied.
+                // Treat an existing marker as a reservation collision, not as a permission grant.
+                if (TryReclaimStaleMarker(markerPath)) index--;
+            }
         }
 
         throw new IOException("Unable to reserve a unique output path.");
@@ -169,6 +175,8 @@ public sealed class OutputReservationService : IOutputReservationService
             return true;
         }
     }
+
+    private static bool IsMarkerCollision(string path) => File.Exists(path) || Directory.Exists(path);
 
     private static bool PathExists(string path) => File.Exists(path) || Directory.Exists(path);
 
