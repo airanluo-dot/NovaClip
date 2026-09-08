@@ -281,7 +281,7 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
             ? string.Empty
             : "WHERE (UpdatedAt < $beforeUpdatedAt OR (UpdatedAt = $beforeUpdatedAt AND Id < $beforeId))";
         command.CommandText = $"""
-            SELECT Id, PageUrl, Title, Status, CreatedAt, UpdatedAt, OutputPath, SelectedQualityId, SelectedCodec, ErrorCode, ErrorMessage, DownloadedBytes, TotalBytes, RunId
+            SELECT Id, PageUrl, Title, Status, OperationState, CreatedAt, UpdatedAt, OutputPath, SelectedQualityId, SelectedCodec, ErrorCode, ErrorMessage, DownloadedBytes, TotalBytes, RunId
             FROM {table}
             {cursorClause}
             ORDER BY UpdatedAt DESC, Id DESC
@@ -312,6 +312,7 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
         command.Parameters.AddWithValue("$pageUrl", snapshot.PageUrl);
         command.Parameters.AddWithValue("$title", snapshot.Title);
         command.Parameters.AddWithValue("$status", (int)snapshot.State);
+        command.Parameters.AddWithValue("$operationState", (int)snapshot.OperationState);
         command.Parameters.AddWithValue("$createdAt", snapshot.CreatedAt.ToString("O"));
         command.Parameters.AddWithValue("$updatedAt", snapshot.UpdatedAt.ToString("O"));
         command.Parameters.AddWithValue("$outputPath", snapshot.OutputPath);
