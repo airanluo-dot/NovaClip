@@ -25,7 +25,7 @@ jobs:
           dotnet restore tests/NovaClip.Core.Tests/NovaClip.Core.Tests.csproj
           dotnet restore tests/NovaClip.Infrastructure.Tests/NovaClip.Infrastructure.Tests.csproj
           dotnet restore tests/NovaClip.Bilibili.Tests/NovaClip.Bilibili.Tests.csproj
-      dotnet restore tests/NovaClip.Updater.Tests/NovaClip.Updater.Tests.csproj
+          dotnet restore tests/NovaClip.Updater.Tests/NovaClip.Updater.Tests.csproj
       - name: Build
         run: |
           dotnet build src/NovaClip.Contracts/NovaClip.Contracts.csproj -c Release
