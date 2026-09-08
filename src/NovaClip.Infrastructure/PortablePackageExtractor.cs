@@ -118,8 +118,9 @@ public static class PortablePackageExtractor
     private static string? NormalizeEntryPath(string value)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
-        var normalized = value.Replace('\\', '/');
-        if (normalized.StartsWith("/", StringComparison.Ordinal) || normalized.Contains(':', StringComparison.Ordinal)) throw new InvalidDataException("The update archive contains an absolute path.");
+        var normalized = value.Replace('\\', '/').TrimEnd('/');
+        if (normalized.Length == 0) return null;
+        if (normalized.StartsWith("/", StringComparison.Ordinal) || normalized.Contains(':')) throw new InvalidDataException("The update archive contains an absolute path.");
         var parts = normalized.Split('/', StringSplitOptions.None);
         if (parts.Any(part => part.Length == 0 || part is "." or "..")) throw new InvalidDataException("The update archive contains a traversal path.");
         return string.Join("/", parts);

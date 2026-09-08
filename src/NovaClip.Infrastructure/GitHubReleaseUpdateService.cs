@@ -114,7 +114,7 @@ public sealed class GitHubReleaseUpdateService : IUpdateService, IDisposable
 
         var expectedDigest = ParseSha256Digest(asset.Digest);
         if (expectedDigest is null) throw new InvalidDataException("更新包缺少有效的 SHA-256 摘要，已拒绝执行。");
-        if (asset.Size is not > 0 || asset.Size > MaxUpdateAssetBytes)
+        if (asset.Size is not long declaredSize || declaredSize <= 0 || declaredSize > MaxUpdateAssetBytes)
         {
             throw new InvalidDataException("更新包缺少有效的大小声明，已拒绝执行。");
         }
@@ -132,7 +132,7 @@ public sealed class GitHubReleaseUpdateService : IUpdateService, IDisposable
         {
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
-            if (response.Content.Headers.ContentLength is long contentLength && contentLength != asset.Size.Value)
+            if (response.Content.Headers.ContentLength is long contentLength && contentLength != declaredSize)
             {
                 throw new InvalidDataException("更新包大小声明与响应不一致，已拒绝执行。");
             }
