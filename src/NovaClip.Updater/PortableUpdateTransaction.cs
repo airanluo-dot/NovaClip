@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using NovaClip.Core;
 
@@ -41,6 +42,7 @@ internal sealed class PortableUpdateTransaction
         source = Path.GetFullPath(source);
         target = Path.GetFullPath(target);
         RecoverPending(target);
+        ValidateTarget(target);
 
         var manifestPath = Path.Combine(source, ManifestName);
         var manifest = PackageManifest.Load(manifestPath);
@@ -62,6 +64,15 @@ internal sealed class PortableUpdateTransaction
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Where(IsSafeRelativePath)
             .ToArray();
+        foreach (var path in touched)
+        {
+            var resolved = ResolveSafe(target, path);
+            if (File.Exists(resolved) && HasReparsePoint(resolved))
+            {
+                throw new InvalidDataException("The target installation contains a reparse-point file.");
+            }
+        }
+
         var existing = touched.Where(path => File.Exists(ResolveSafe(target, path))).ToArray();
 
         var journal = new JournalDocument
@@ -80,7 +91,7 @@ internal sealed class PortableUpdateTransaction
             transaction.BackupExisting();
             transaction.UpdateState("Applying");
             transaction.ApplyFiles();
-            transaction.UpdateState("Committed");
+            transaction.UpdateState("Applied");
             return transaction;
         }
         catch
@@ -94,6 +105,7 @@ internal sealed class PortableUpdateTransaction
     {
         try
         {
+            UpdateState("Committed");
             if (Directory.Exists(_backupRoot)) Directory.Delete(_backupRoot, recursive: true);
             if (File.Exists(_journalPath)) File.Delete(_journalPath);
             if (Directory.Exists(_stateRoot) && !Directory.EnumerateFileSystemEntries(_stateRoot).Any()) Directory.Delete(_stateRoot);
@@ -180,7 +192,17 @@ internal sealed class PortableUpdateTransaction
             try
             {
                 var journal = JsonSerializer.Deserialize<JournalDocument>(File.ReadAllText(journalPath), JsonOptions);
-                if (journal is null || !string.Equals(Path.GetFullPath(journal.Target), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase)) continue;
+                var expectedStateRoot = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(target))!, ".novaclip-update");
+                if (journal is null ||
+                    journal.Touched is null ||
+                    journal.Existing is null ||
+                    !string.Equals(Path.GetFullPath(journal.Target), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase) ||
+                    !IsWithin(expectedStateRoot, journal.BackupRoot))
+                {
+                    continue;
+                }
+
+                journal.BackupRoot = Path.GetFullPath(journal.BackupRoot);
                 if (journal.State == "Committed")
                 {
                     if (Directory.Exists(journal.BackupRoot)) Directory.Delete(journal.BackupRoot, true);
@@ -203,6 +225,22 @@ internal sealed class PortableUpdateTransaction
                 // A malformed journal is not allowed to mutate arbitrary paths.
             }
         }
+    }
+
+    private static void ValidateTarget(string target)
+    {
+        if (!Directory.Exists(target) || HasReparsePoint(target))
+        {
+            throw new InvalidDataException("The target installation directory is missing or unsafe.");
+        }
+    }
+
+    private static bool IsWithin(string root, string candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate)) return false;
+        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var candidateFull = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return candidateFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void ValidateSource(string source, PackageManifest manifest)
@@ -229,7 +267,9 @@ internal sealed class PortableUpdateTransaction
     {
         CopyAtomically(source, destination);
         var info = new FileInfo(destination);
-        if (info.Length != entry.Size || !string.Equals(ComputeSha256(destination), entry.Sha256, StringComparison.OrdinalIgnoreCase))
+        if (HasReparsePoint(destination) ||
+            info.Length != entry.Size ||
+            !string.Equals(ComputeSha256(destination), entry.Sha256, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("The copied update file failed verification.");
         }
@@ -328,7 +368,13 @@ internal sealed class PortableUpdateTransaction
     private static void WriteJournal(string path, JournalDocument document)
     {
         var temporary = path + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(document, JsonOptions));
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(document, JsonOptions));
+        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+        {
+            stream.Write(bytes);
+            stream.Flush(flushToDisk: true);
+        }
+
         File.Move(temporary, path, overwrite: true);
     }
 
@@ -356,11 +402,32 @@ internal sealed class PortableUpdateTransaction
 
         public void Validate()
         {
-            if (SchemaVersion != 1 || Product != "NovaClip" || !SemanticVersion.TryParse(Version, out _) || Files.Count == 0 || Files.Count > MaxManifestEntries) throw new InvalidDataException("The update package manifest header is invalid.");
+            if (SchemaVersion != 1 ||
+                !string.Equals(Product, "NovaClip", StringComparison.Ordinal) ||
+                !SemanticVersion.TryParse(Version, out _) ||
+                Files is null ||
+                Files.Count == 0 ||
+                Files.Count > MaxManifestEntries)
+            {
+                throw new InvalidDataException("The update package manifest header is invalid.");
+            }
+
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var file in Files)
             {
-                if (file is null || !IsSafeRelativePath(file.Path) || !seen.Add(file.Path) || file.Size < 0 || file.Size > MaxFileBytes || file.Sha256.Length != 64 || file.Sha256.Any(character => !char.IsAsciiHexDigit(character))) throw new InvalidDataException("The update package manifest contains an invalid file entry.");
+                if (file is null ||
+                    IsUserDataPath(file.Path) ||
+                    string.Equals(file.Path, ManifestName, StringComparison.OrdinalIgnoreCase) ||
+                    !IsSafeRelativePath(file.Path) ||
+                    !seen.Add(file.Path) ||
+                    file.Size < 0 ||
+                    file.Size > MaxFileBytes ||
+                    string.IsNullOrWhiteSpace(file.Sha256) ||
+                    file.Sha256.Length != 64 ||
+                    file.Sha256.Any(character => !char.IsAsciiHexDigit(character)))
+                {
+                    throw new InvalidDataException("The update package manifest contains an invalid file entry.");
+                }
             }
         }
     }
