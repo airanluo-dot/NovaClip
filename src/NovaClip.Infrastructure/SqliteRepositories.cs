@@ -138,7 +138,7 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
         }, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task EnqueueAsync(DurableObligationKind kind, string payload, string? error, CancellationToken cancellationToken = default)
+    public async Task EnqueueAsync(DurableObligationKind kind, string payload, string? errorMessage, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(payload);
         await ExecuteWriteAsync(async token =>
@@ -155,7 +155,7 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
             command.Parameters.AddWithValue("$payload", payload);
             command.Parameters.AddWithValue("$created", now);
             command.Parameters.AddWithValue("$updated", now);
-            command.Parameters.AddWithValue("$error", (object?)error ?? DBNull.Value);
+            command.Parameters.AddWithValue("$error", (object?)errorMessage ?? DBNull.Value);
             await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
     }
@@ -188,8 +188,8 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
     public Task CompleteAsync(Guid id, CancellationToken cancellationToken = default) =>
         UpdateObligationAsync(id, completed: true, null, cancellationToken);
 
-    public Task RecordFailureAsync(Guid id, string error, CancellationToken cancellationToken = default) =>
-        UpdateObligationAsync(id, completed: false, error, cancellationToken);
+    public Task RecordFailureAsync(Guid id, string errorMessage, CancellationToken cancellationToken = default) =>
+        UpdateObligationAsync(id, completed: false, errorMessage, cancellationToken);
 
     private async Task UpdateObligationAsync(Guid id, bool completed, string? error, CancellationToken cancellationToken)
     {
