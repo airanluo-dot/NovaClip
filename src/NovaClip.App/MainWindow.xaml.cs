@@ -21,8 +21,14 @@ public sealed partial class MainWindow : Window
         NavigateTo("browser");
         RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
         InstallKeyboardAccelerators();
-        Closed += (_, _) => StartupDiagnostics.Info("MainWindow.Closed");
+        Closed += MainWindow_Closed;
         StartupDiagnostics.Info("Shell.Ready");
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        StartupDiagnostics.Info("MainWindow.Closed");
+        AppServices.BeginShutdown();
     }
 
     private void TryConfigureBackdrop()
@@ -70,8 +76,8 @@ public sealed partial class MainWindow : Window
             _ => typeof(Pages.BrowserPage)
         };
         if (ContentFrame.CurrentSourcePageType == pageType) return;
-        if (!ContentFrame.Navigate(pageType)) throw new InvalidOperationException($"NAVIGATION_FAILED:{pageType.Name}");
-        StartupDiagnostics.Info($"{pageType.Name}.Ready");
+        if (!ContentFrame.Navigate(pageType)) throw new InvalidOperationException("NAVIGATION_FAILED:" + pageType.Name);
+        StartupDiagnostics.Info(pageType.Name + ".Ready");
     }
 
     private void InstallKeyboardAccelerators()

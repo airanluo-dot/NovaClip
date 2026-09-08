@@ -19,16 +19,18 @@ public partial class App : Application
         }
         catch (Exception exception)
         {
-            // Keep a resources/XAML failure visible instead of allowing the process to exit with a blank window.
             _resourcesFailed = true;
             StartupDiagnostics.Error("APP_RESOURCES_FAILED", exception);
             ShowStartupFailure(exception);
         }
+
         UnhandledException += (_, args) =>
         {
             StartupDiagnostics.Error("WINUI_UNHANDLED_EXCEPTION", args.Exception);
-            args.Handled = true;
-            if (MainWindow is null) ShowStartupFailure(args.Exception);
+            var recoverable = AppExceptionPolicy.IsRecoverable(args.Exception);
+            args.Handled = recoverable;
+            if (!recoverable) AppServices.BeginShutdown();
+            if (MainWindow is null || recoverable) ShowStartupFailure(args.Exception);
         };
     }
 
@@ -43,18 +45,21 @@ public partial class App : Application
             {
                 await Pages.BrowserPage.VerifyEnvironmentAsync();
             }
+
             MainWindow = new MainWindow();
             MainWindow.Activate();
             if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") == "1")
             {
                 MainWindow.DispatcherQueue.TryEnqueue(MainWindow.RunSmokeNavigation);
             }
+
             StartupDiagnostics.Info("App.StartupCompleted");
-            _ = AppServices.UpdateCoordinator.CheckSilentlyAsync();
+            AppServices.StartBackgroundUpdateCheck();
         }
         catch (Exception exception)
         {
             StartupDiagnostics.Error("APP_STARTUP_FAILED", exception);
+            AppServices.BeginShutdown();
             ShowStartupFailure(exception);
         }
     }
@@ -62,7 +67,7 @@ public partial class App : Application
     private void ShowStartupFailure(Exception exception)
     {
         var fallbackTitle = "NovaClip startup failed";
-        var fallbackMessage = $"NovaClip could not complete startup.\n\n{exception.Message}\n\nDiagnostic log:\n{StartupDiagnostics.LogPath}";
+        var fallbackMessage = "NovaClip could not complete startup.\n\n" + exception.Message + "\n\nDiagnostic log:\n" + StartupDiagnostics.LogPath;
         try
         {
             var text = new LocalizationService();
@@ -96,4 +101,12 @@ public partial class App : Application
             StartupDiagnostics.Error("STARTUP_FAILURE_UI_FAILED", windowException);
         }
     }
+}
+
+internal static class AppExceptionPolicy
+{
+    public static bool IsRecoverable(Exception exception) =>
+        exception is OperationCanceledException or
+        IOException or
+        UnauthorizedAccessException;
 }
