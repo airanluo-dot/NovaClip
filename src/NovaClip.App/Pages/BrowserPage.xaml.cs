@@ -14,8 +14,6 @@ namespace NovaClip.App.Pages;
 public sealed partial class BrowserPage : Page
 {
     private const int MaxPlayUrlResponseCharacters = 10_000_000;
-    private const int MaxCookieHeaderCharacters = 64_000;
-
     private readonly PlayUrlNormalizer _normalizer = new();
     private readonly BilibiliUrlResolver _urlResolver = new();
     private readonly BrowserNavigationPolicy _policy = new();
@@ -29,6 +27,78 @@ public sealed partial class BrowserPage : Page
     private Task? _initializationTask;
     private Uri? _pendingNavigationUri;
     private bool _isLoading;
+
+    public static BrowserPage? Current { get; private set; }
+    public static BrowserPage? Instance { get; private set; }
+    public bool HasInitializedWebView => BrowserWebView.CoreWebView2 is not null;
+
+    public BrowserPage()
+    {
+        InitializeComponent();
+        Instance = this;
+        _detector.StateChanged += Detector_StateChanged;
+        NavigationCacheMode = Microsoft.UI.Xaml.Navigation.NavigationCacheMode.Required;
+        Loaded += BrowserPage_Loaded;
+        Unloaded += BrowserPage_Unloaded;
+    }
+
+    public void FocusAddressBar()
+    {
+        AddressBox.Focus(FocusState.Keyboard);
+        AddressBox.SelectAll();
+    }
+
+    public void NavigateAddress(string input)
+    {
+        if (!_urlResolver.TryResolve(input, out var uri))
+        {
+            ShowError("BROWSER_INVALID_ADDRESS", null);
+            FocusAddressBar();
+            return;
+        }
+
+        Navigate(uri);
+    }
+
+    public void Reload()
+    {
+        if (_isLoading) BrowserWebView.CoreWebView2?.Stop();
+        else BrowserWebView.CoreWebView2?.Reload();
+    }
+
+    public void GoBack()
+    {
+        if (BrowserWebView.CoreWebView2?.CanGoBack == true) BrowserWebView.CoreWebView2.GoBack();
+    }
+
+    public void GoForward()
+    {
+        if (BrowserWebView.CoreWebView2?.CanGoForward == true) BrowserWebView.CoreWebView2.GoForward();
+    }
+
+    private async void BrowserPage_Loaded(object sender, RoutedEventArgs e)
+    {
+        Current = this;
+        StartupDiagnostics.Info("BrowserPage.Loaded");
+        StartupDiagnostics.Info("BrowserPage.InitializeRequested");
+        _initializationTask ??= InitializeWebViewAsync();
+        try
+        {
+            await _initializationTask;
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Error("WEBVIEW_INITIALIZATION_UNOBSERVED", exception);
+            ShowError("WEBVIEW_INITIALIZATION_FAILED", exception.Message);
+            _initializationTask = null;
+        }
+    }
+
+    private void BrowserPage_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (ReferenceEquals(Current, this)) Current = null;
+        if (ReferenceEquals(Instance, this)) Instance = null;
+    }
 
     internal static Task VerifyEnvironmentAsync() => BrowserWebViewEnvironment.VerifyAsync();
 

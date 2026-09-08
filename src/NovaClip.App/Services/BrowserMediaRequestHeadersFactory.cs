@@ -27,7 +27,7 @@ internal static class BrowserMediaRequestHeadersFactory
         string? cookieHeader = null;
         try
         {
-            var cookies = await core.CookieManager.GetCookiesAsync(pageUri.ToString()).ConfigureAwait(false);
+            var cookies = await core.CookieManager.GetCookiesAsync(pageUri.ToString());
             var builder = new StringBuilder();
             foreach (var cookie in cookies)
             {
@@ -62,7 +62,7 @@ internal static class BrowserMediaRequestHeadersFactory
         string? userAgent = null;
         try
         {
-            var raw = await core.ExecuteScriptAsync("navigator.userAgent").ConfigureAwait(false);
+            var raw = await core.ExecuteScriptAsync("navigator.userAgent");
             userAgent = JsonSerializer.Deserialize<string>(raw);
         }
         catch (Exception exception)
