@@ -327,10 +327,13 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
             await _engine.DownloadAsync(work.Request, progress, run.StopSource.Token).ConfigureAwait(false);
             var taskRoot = HttpRangeDownloader.GetTaskRoot(work.Request.OutputDirectory, work.Request.TaskId);
+            var requiresMerge = work.Request.MergeAfterDownload &&
+                work.Request.VideoTrack is not null &&
+                work.Request.AudioTrack is not null;
 
-            if (!await SetStateAsync(work, DownloadTaskState.Finalizing, run.RunId).ConfigureAwait(false)) return;
+            if (!requiresMerge && !await SetStateAsync(work, DownloadTaskState.Finalizing, run.RunId).ConfigureAwait(false)) return;
 
-            if (work.Request.MergeAfterDownload && work.Request.VideoTrack is not null && work.Request.AudioTrack is not null)
+            if (requiresMerge)
             {
                 if (_ffmpeg is null) throw new InvalidOperationException("FFmpeg service is not configured.");
                 if (!await SetStateAsync(work, DownloadTaskState.Merging, run.RunId).ConfigureAwait(false)) return;
