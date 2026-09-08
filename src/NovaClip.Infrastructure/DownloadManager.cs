@@ -369,7 +369,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 {
                     audioReservation = await _reservations.ReserveAsync(work.Request.TaskId, work.Request.OutputDirectory, audioName, run.StopSource.Token).ConfigureAwait(false);
                     var committedAudio = await _reservations.CommitAsync(audioReservation, audioStaging, run.StopSource.Token).ConfigureAwait(false);
-                    StartupDiagnostics.Info($"Task {work.Request.TaskId:D} committed secondary audio {committedAudio.OutputPath}.");
+                    StartupDiagnosticsAdapter.Info($"Task {work.Request.TaskId:D} committed secondary audio {committedAudio.OutputPath}.");
                 }
                 catch
                 {
