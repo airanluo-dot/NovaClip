@@ -30,7 +30,7 @@ public sealed class SqliteDownloadTaskRepository : IDownloadTaskRepository, IHis
         await ExecuteWriteAsync(async token =>
         {
             await using var connection = await OpenAsync(token).ConfigureAwait(false);
-            await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(token).ConfigureAwait(false);
 
             await ExecuteNonQueryAsync(connection, transaction, """
                 CREATE TABLE IF NOT EXISTS SchemaVersion (Version INTEGER NOT NULL);

@@ -14,7 +14,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
     private readonly IDurableObligationStore? _obligations;
     private readonly IOutputReservationService _reservations;
     private readonly bool _ownsReservations;
-    private readonly DownloadPersistenceQueue? _persistence;
+    private readonly DownloadPersistenceWorker? _persistence;
     private readonly SemaphoreSlim _slots;
     private readonly object _slotsGate = new();
     private readonly ConcurrentDictionary<Guid, DownloadWork> _work = new();
@@ -39,7 +39,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         _obligations = obligations;
         _reservations = reservations ?? new OutputReservationService();
         _ownsReservations = reservations is null;
-        _persistence = repository is null ? null : new DownloadPersistenceQueue(repository);
+        _persistence = repository is null ? null : new DownloadPersistenceWorker(repository);
         _maxConcurrentTasks = Math.Clamp(maxConcurrentTasks, 1, 3);
         _slots = new SemaphoreSlim(_maxConcurrentTasks, 3);
     }
@@ -80,7 +80,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         }
         catch
         {
-            await _reservations.ReleaseAsync(reservation).ConfigureAwait(false);
+            await _reservations.ReleaseAsync(reservation, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
     }
@@ -246,7 +246,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
     public async Task ShutdownAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
-        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
         Interlocked.Exchange(ref _accepting, 0);
 
         var runs = new List<(CancellationTokenSource Source, Task Task)>();
@@ -708,8 +708,8 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         if (request.TaskId == Guid.Empty) throw new ArgumentException("The download task ID cannot be empty.", nameof(request));
         ArgumentNullException.ThrowIfNull(request.Media);
         ArgumentNullException.ThrowIfNull(request.Media.LegacySegments);
-        if (string.IsNullOrWhiteSpace(request.OutputDirectory) || !Path.IsPathRooted(request.OutputDirectory)) throw new ArgumentException("The output directory must be absolute.", nameof(request.OutputDirectory));
-        if (string.IsNullOrWhiteSpace(request.OutputFileName) || request.OutputFileName is "." or ".." || request.OutputFileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(request.OutputFileName) != request.OutputFileName) throw new ArgumentException("The output file name must be a single safe file name.", nameof(request.OutputFileName));
+        if (string.IsNullOrWhiteSpace(request.OutputDirectory) || !Path.IsPathRooted(request.OutputDirectory)) throw new ArgumentException("The output directory must be absolute.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.OutputFileName) || request.OutputFileName is "." or ".." || request.OutputFileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(request.OutputFileName) != request.OutputFileName) throw new ArgumentException("The output file name must be a single safe file name.", nameof(request));
         if (request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count == 0) throw new ArgumentException("The download request has no media tracks.", nameof(request));
         ValidateTrack(request.VideoTrack, TrackType.Video);
         ValidateTrack(request.AudioTrack, TrackType.Audio);

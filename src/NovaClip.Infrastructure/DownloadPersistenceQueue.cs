@@ -3,7 +3,7 @@ using NovaClip.Core;
 
 namespace NovaClip.Infrastructure;
 
-public sealed class DownloadPersistenceQueue : IAsyncDisposable
+public sealed class DownloadPersistenceWorker : IAsyncDisposable
 {
     private readonly IDownloadTaskRepository _repository;
     private readonly ConcurrentQueue<CriticalWrite> _critical = new();
@@ -13,7 +13,7 @@ public sealed class DownloadPersistenceQueue : IAsyncDisposable
     private readonly Task _worker;
     private int _accepting = 1;
 
-    public DownloadPersistenceQueue(IDownloadTaskRepository repository)
+    public DownloadPersistenceWorker(IDownloadTaskRepository repository)
     {
         _repository = repository ?? throw new ArgumentNullException(nameof(repository));
         _worker = Task.Run(WorkerAsync);
@@ -24,14 +24,16 @@ public sealed class DownloadPersistenceQueue : IAsyncDisposable
     public void EnqueueProgress(DownloadTaskSnapshot snapshot)
     {
         if (!IsAccepting) return;
-        _progress.AddOrUpdate(snapshot.Id, snapshot, static (_, existing, incoming) =>
-            incoming.UpdatedAt >= existing.UpdatedAt ? incoming : existing, snapshot);
+        _progress.AddOrUpdate(
+            snapshot.Id,
+            snapshot,
+            (_, existing) => snapshot.UpdatedAt >= existing.UpdatedAt ? snapshot : existing);
         ReleaseSignal();
     }
 
     public Task EnqueueCriticalAsync(DownloadTaskSnapshot snapshot, CancellationToken cancellationToken = default)
     {
-        if (!IsAccepting) return Task.FromException(new ObjectDisposedException(nameof(DownloadPersistenceQueue)));
+        if (!IsAccepting) return Task.FromException(new ObjectDisposedException(nameof(DownloadPersistenceWorker)));
         cancellationToken.ThrowIfCancellationRequested();
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _critical.Enqueue(new CriticalWrite(snapshot, completion));

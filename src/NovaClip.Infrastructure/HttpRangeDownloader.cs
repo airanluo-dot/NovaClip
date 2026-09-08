@@ -450,12 +450,18 @@ public sealed class HttpRangeDownloader : IDownloadEngine
     private static bool TryCreateHttpUri(string? value, out Uri uri)
     {
         uri = null!;
-        return !string.IsNullOrWhiteSpace(value) &&
-            value.Length <= 16_384 &&
-            Uri.TryCreate(value, UriKind.Absolute, out uri) &&
-            uri.Scheme is "http" or "https" &&
-            !string.IsNullOrWhiteSpace(uri.Host) &&
-            string.IsNullOrEmpty(uri.UserInfo);
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 16_384 ||
+            !Uri.TryCreate(value, UriKind.Absolute, out var candidate) ||
+            candidate is null ||
+            candidate.Scheme is not ("http" or "https") ||
+            string.IsNullOrWhiteSpace(candidate.Host) ||
+            !string.IsNullOrEmpty(candidate.UserInfo))
+        {
+            return false;
+        }
+
+        uri = candidate;
+        return true;
     }
 
     private static bool ContainsHeaderInjection(string value) => value.IndexOfAny(['\r', '\n']) >= 0;
@@ -477,8 +483,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         if (request.TaskId == Guid.Empty) throw new ArgumentException("The download task ID cannot be empty.", nameof(request));
         ArgumentNullException.ThrowIfNull(request.Media);
         ArgumentNullException.ThrowIfNull(request.Media.LegacySegments);
-        if (string.IsNullOrWhiteSpace(request.OutputDirectory) || !Path.IsPathRooted(request.OutputDirectory)) throw new ArgumentException("The output directory must be an absolute path.", nameof(request.OutputDirectory));
-        if (string.IsNullOrWhiteSpace(request.OutputFileName) || request.OutputFileName is "." or ".." || request.OutputFileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(request.OutputFileName) != request.OutputFileName) throw new ArgumentException("The output file name must be a single safe file name.", nameof(request.OutputFileName));
+        if (string.IsNullOrWhiteSpace(request.OutputDirectory) || !Path.IsPathRooted(request.OutputDirectory)) throw new ArgumentException("The output directory must be an absolute path.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.OutputFileName) || request.OutputFileName is "." or ".." || request.OutputFileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(request.OutputFileName) != request.OutputFileName) throw new ArgumentException("The output file name must be a single safe file name.", nameof(request));
         if (request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count == 0) throw new ArgumentException("The download request has no media tracks.", nameof(request));
         ValidateTrack(request.VideoTrack, TrackType.Video);
         ValidateTrack(request.AudioTrack, TrackType.Audio);
