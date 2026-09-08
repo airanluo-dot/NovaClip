@@ -30,8 +30,15 @@ public partial class App : Application
             StartupDiagnostics.Error("WINUI_UNHANDLED_EXCEPTION", args.Exception);
             var recoverable = AppExceptionPolicy.IsRecoverable(args.Exception);
             args.Handled = recoverable;
-            if (!recoverable) AppServices.BeginShutdown();
-            if (MainWindow is null || recoverable) ShowStartupFailure(args.Exception);
+            if (!recoverable)
+            {
+                AppServices.BeginShutdown();
+                ShowStartupFailure(args.Exception);
+            }
+            else if (MainWindow is null)
+            {
+                ShowStartupFailure(args.Exception);
+            }
         };
     }
 
@@ -45,6 +52,7 @@ public partial class App : Application
             _singleInstance.ActivateRequested += SingleInstance_ActivateRequested;
 
             await AppServices.InitializeAsync();
+            StartupDiagnostics.Configure(AppServices.Settings.DebugLogging);
             StartupDiagnostics.Info("Services.Ready");
             if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") == "1")
             {
@@ -65,8 +73,15 @@ public partial class App : Application
         {
             StartupDiagnostics.Error("APP_STARTUP_FAILED", exception);
             AppServices.BeginShutdown();
+            DisposeSingleInstance();
             ShowStartupFailure(exception);
         }
+    }
+
+    public void DisposeSingleInstance()
+    {
+        var coordinator = Interlocked.Exchange(ref _singleInstance, null);
+        coordinator?.Dispose();
     }
 
     private void SingleInstance_ActivateRequested(object? sender, EventArgs e)

@@ -24,10 +24,12 @@ public sealed class SettingsApplicationCoordinator
                 _settings.Validate();
                 _downloads.SetMaxConcurrentTasks(_settings.MaxConcurrentTasks);
                 _settings.Save();
+                StartupDiagnostics.Configure(_settings.DebugLogging);
             }
             catch
             {
                 _settings.Restore(before);
+                StartupDiagnostics.Configure(before.DebugLogging);
                 try { _downloads.SetMaxConcurrentTasks(before.MaxConcurrentTasks); } catch { }
                 throw;
             }

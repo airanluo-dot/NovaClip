@@ -29,6 +29,7 @@ public sealed partial class MainWindow : Window
     {
         StartupDiagnostics.Info("MainWindow.Closed");
         AppServices.BeginShutdown();
+        (Microsoft.UI.Xaml.Application.Current as App)?.DisposeSingleInstance();
     }
 
     private void TryConfigureBackdrop()

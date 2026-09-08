@@ -110,7 +110,8 @@ public sealed class SingleInstanceCoordinator : IDisposable
         _stopSource.Cancel();
         try { _serverTask.Wait(1000); } catch { }
         _stopSource.Dispose();
-        _mutex.ReleaseMutex();
+        try { _mutex.ReleaseMutex(); }
+        catch (ApplicationException or ObjectDisposedException) { }
         _mutex.Dispose();
         GC.SuppressFinalize(this);
     }

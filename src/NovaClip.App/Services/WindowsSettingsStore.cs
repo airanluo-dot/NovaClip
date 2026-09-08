@@ -80,6 +80,7 @@ public sealed class WindowsSettingsStore
             if (!string.IsNullOrWhiteSpace(document.UpdateFeedRepository)) UpdateFeedRepository = document.UpdateFeedRepository;
             if (document.Theme is "System" or "Light" or "Dark") Theme = document.Theme;
             Validate();
+            StartupDiagnostics.Configure(DebugLogging);
         }
         catch (Exception exception)
         {
