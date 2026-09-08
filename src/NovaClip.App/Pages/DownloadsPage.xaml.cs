@@ -25,9 +25,8 @@ public sealed partial class DownloadsPage : Page
         _coalesceTimer.Interval = TimeSpan.FromMilliseconds(100);
         _coalesceTimer.IsRepeating = true;
         _coalesceTimer.Tick += CoalesceTimer_Tick;
-        Loaded += (_, _) => _coalesceTimer.Start();
+        Loaded += DownloadsPage_Loaded;
         Unloaded += DownloadsPage_Unloaded;
-        AppServices.Downloads.TaskChanged += Downloads_TaskChanged;
         StartupDiagnostics.Info("DownloadsPage.Ready");
     }
 
@@ -37,6 +36,18 @@ public sealed partial class DownloadsPage : Page
         var row = new DownloadRow(snapshot);
         _rowById[snapshot.Id] = row;
         _rows.Add(row);
+    }
+
+    private void DownloadsPage_Loaded(object sender, RoutedEventArgs e)
+    {
+        foreach (var task in AppServices.Downloads.GetTasks())
+        {
+            _pendingSnapshots[task.Id] = task;
+        }
+
+        AppServices.Downloads.TaskChanged -= Downloads_TaskChanged;
+        AppServices.Downloads.TaskChanged += Downloads_TaskChanged;
+        _coalesceTimer.Start();
     }
 
     private void Downloads_TaskChanged(object? sender, DownloadTaskSnapshot snapshot) =>
