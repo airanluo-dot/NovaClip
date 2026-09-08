@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using NovaClip.Core;
 
@@ -191,10 +192,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         var json = JsonSerializer.Serialize(manifest, ManifestJsonOptions);
         if (json.Length > MaxManifestCharacters) throw new InvalidDataException("The task manifest exceeded the safety limit.");
 
-        var manifestPath = Path.Combine(taskRoot, "task.json");
-        var temporaryPath = manifestPath + ".tmp";
-        await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
-        File.Move(temporaryPath, manifestPath, true);
+        await WriteAtomicTextAsync(Path.Combine(taskRoot, "task.json"), json, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<long> DownloadTrackAsync(
@@ -345,12 +343,34 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         return downloaded;
     }
 
-    private static async Task WriteResumeMetadataAsync(string path, ResumeMetadata metadata, CancellationToken cancellationToken)
+    private static Task WriteResumeMetadataAsync(string path, ResumeMetadata metadata, CancellationToken cancellationToken) =>
+        WriteAtomicTextAsync(path, JsonSerializer.Serialize(metadata, ManifestJsonOptions), cancellationToken);
+
+    private static async Task WriteAtomicTextAsync(string path, string content, CancellationToken cancellationToken)
     {
-        var json = JsonSerializer.Serialize(metadata, ManifestJsonOptions);
         var temporaryPath = path + ".tmp";
-        await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
-        File.Move(temporaryPath, path, true);
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(content);
+            await using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await stream.WriteAsync(bytes.AsMemory(), cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            TryDelete(temporaryPath);
+        }
     }
 
     private static ResumeMetadata? TryReadResumeMetadata(string path)
