@@ -119,21 +119,18 @@ internal static class Program
         }
     }
 
-    private static Process? StartAndCheck(string path)
+    private static bool StartAndCheck(string path)
     {
-        if (!IsSafeExistingFile(path, ".exe")) return null;
-        var process = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-        if (process is null) return null;
+        if (!IsSafeExistingFile(path, ".exe")) return false;
+        using var process = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        if (process is null) return false;
         for (var attempt = 0; attempt < 20; attempt++)
         {
-            if (process.HasExited)
-            {
-                process.Dispose();
-                return null;
-            }
+            if (process.HasExited) return false;
             Thread.Sleep(500);
         }
-        return process;
+
+        return true;
     }
 
     private static bool IsSafeDirectory(string path) =>

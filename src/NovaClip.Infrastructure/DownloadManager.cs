@@ -51,6 +51,13 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
     public async Task<Guid> EnqueueAsync(DownloadRequest request, CancellationToken cancellationToken = default)
     {
         ValidateRequest(request);
+        if (request.VideoTrack is null &&
+            request.AudioTrack is not null &&
+            string.Equals(Path.GetExtension(request.OutputFileName), ".mp4", StringComparison.OrdinalIgnoreCase))
+        {
+            request = request with { OutputFileName = Path.ChangeExtension(request.OutputFileName, ".m4a") };
+        }
+
         if (!IsAcceptingWork) throw new InvalidOperationException("The application is shutting down and no new downloads are accepted.");
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -234,7 +241,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             var work = new DownloadWork(request, restored, reservation);
             if (!_work.TryAdd(snapshot.Id, work))
             {
-                await _reservations.ReleaseAsync(reservation).ConfigureAwait(false);
+                await _reservations.ReleaseAsync(reservation, CancellationToken.None).ConfigureAwait(false);
                 continue;
             }
 
@@ -361,11 +368,6 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 var partName = track.Type == TrackType.Video ? "video.m4s.part" : "audio.m4s.part";
                 var staging = Path.Combine(taskRoot, partName);
                 ValidateStagingFile(staging);
-                if (track.Type == TrackType.Audio && string.Equals(Path.GetExtension(work.GetSnapshot().OutputPath), ".mp4", StringComparison.OrdinalIgnoreCase))
-                {
-                    var newPath = Path.ChangeExtension(work.GetSnapshot().OutputPath, ".m4a");
-                    lock (work.Gate) work.Snapshot = work.Snapshot with { OutputPath = newPath, UpdatedAt = DateTimeOffset.UtcNow };
-                }
                 await CommitPrimaryAsync(work, staging, run.StopSource.Token).ConfigureAwait(false);
             }
 
@@ -682,6 +684,12 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                     manifest.RequestHeaders.UserAgent,
                     null,
                     manifest.RequestHeaders.RefreshUrl));
+            if (video is null &&
+                audio is not null &&
+                string.Equals(Path.GetExtension(request.OutputFileName), ".mp4", StringComparison.OrdinalIgnoreCase))
+            {
+                request = request with { OutputFileName = Path.ChangeExtension(request.OutputFileName, ".m4a") };
+            }
             ValidateRequest(request);
             return request;
         }

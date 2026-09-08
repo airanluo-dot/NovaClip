@@ -151,16 +151,16 @@ public sealed class GitHubReleaseUpdateService : IUpdateService, IDisposable
             int read;
             while ((read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
             {
-                if (received > asset.Size.Value - read) throw new InvalidDataException("更新包超过声明大小，已拒绝执行。");
+                if (received > declaredSize - read) throw new InvalidDataException("更新包超过声明大小，已拒绝执行。");
                 await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 hash.AppendData(buffer, 0, read);
                 received += read;
-                progress?.Report(Math.Min(1, (double)received / asset.Size.Value));
+                progress?.Report(Math.Min(1, (double)received / declaredSize));
             }
 
             await output.FlushAsync(cancellationToken).ConfigureAwait(false);
             var actualDigest = hash.GetHashAndReset();
-            if (received != asset.Size.Value || !CryptographicOperations.FixedTimeEquals(actualDigest, expectedDigest))
+            if (received != declaredSize || !CryptographicOperations.FixedTimeEquals(actualDigest, expectedDigest))
             {
                 throw new InvalidDataException("更新包 SHA-256 校验失败，已拒绝执行。");
             }
