@@ -4,9 +4,9 @@ NovaClip 1.0.0-beta.7 has two explicit update modes: installed setup coverage an
 
 ## Common verification
 
-The release service accepts only safe setup/portable filenames and supported MIME types. The GitHub asset must have a positive declared size and a `sha256:` digest. NovaClip downloads `novaclip-update-manifest.json` and `.sig`, verifies the RSA-PKCS#1 SHA-256 signature with the embedded public key, requires key ID `novaclip-beta7-2026`, and matches version, channel, runtime, package type, name, size and SHA-256 before selecting the package.
+The release service accepts only safe setup/portable filenames and supported MIME types. Each GitHub release asset must have a positive declared size, a trusted GitHub HTTPS URL and a `sha256:` digest. NovaClip downloads the selected package to a bounded temporary path, verifies its declared size and SHA-256 digest, and only then hands it to the updater. Public releases do not require a private key or a repository secret.
 
-Missing digest, missing signed manifest, mismatched key ID, signature, size, channel or asset hash rejects the update before updater handoff.
+Missing digest, invalid URL/name/type, mismatched size or SHA-256 mismatch rejects the update before updater handoff.
 
 ## Installed build
 

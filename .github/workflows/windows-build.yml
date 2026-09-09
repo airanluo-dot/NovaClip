@@ -111,12 +111,6 @@ jobs:
           $assemblyVersion = "${{ steps.version.outputs.assemblyVersion }}"
           $runtimeIdentifier = "${{ steps.version.outputs.runtimeIdentifier }}"
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DProductVersion=$assemblyVersion" "/DDisplayVersion=$version" "/DOutputBaseFilename=NovaClip-$version-$runtimeIdentifier-setup" "/DPublishDir=${{ github.workspace }}\publish\$runtimeIdentifier" "/DOutputDir=${{ github.workspace }}\artifacts\windows" installer\NovaClip.iss
-      - name: Create signed update manifest
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        env:
-          NOVACLIP_UPDATE_SIGNING_KEY_PEM: ${{ secrets.NOVACLIP_UPDATE_SIGNING_KEY_PEM }}
-        run: ./scripts/sign-update-manifest.ps1 -InputRoot artifacts/windows
       - name: Hash deliverables
         shell: pwsh
         run: Get-ChildItem artifacts/windows -File | Get-FileHash -Algorithm SHA256 | Format-Table
@@ -126,8 +120,6 @@ jobs:
           path: |
             artifacts/windows/*.zip
             artifacts/windows/*-setup.exe
-            artifacts/windows/novaclip-update-manifest.json
-            artifacts/windows/novaclip-update-manifest.sig
           if-no-files-found: error
 
   release:

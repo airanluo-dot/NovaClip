@@ -48,9 +48,8 @@ Every navigation starts a new generation. Page context, push/replace state, pops
 ```text
 GitHub Release API
   → require setup/portable asset, positive size and sha256 digest
-  → download signed manifest + signature
-  → verify embedded public key + key ID + version/channel + asset hash/size
-  → download selected package
+  → download selected package over trusted GitHub HTTPS
+  → verify declared size and SHA-256 digest
   → extract with entry/size/ratio/disk/reparse limits
   → updater waits for app exit
   → journal backup/replace/rollback

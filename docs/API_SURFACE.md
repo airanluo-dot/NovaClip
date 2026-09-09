@@ -8,7 +8,7 @@ The beta.7 production path uses the contracts for:
 - media detection page identity, generation and duplicate suppression;
 - download queue, output reservation, durable operation state and history/outbox;
 - settings validation, runtime apply and atomic persistence;
-- update discovery, package extraction, signed-manifest verification and updater handoff.
+- update discovery, package extraction, SHA-256 digest verification and updater handoff.
 
 Future capability contracts remain available for batch/multipart media, subtitles, danmaku, cover art, metadata, audio tracks, playlists, seasons, stream probing, speed limits and scheduling.
 

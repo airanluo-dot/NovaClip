@@ -6,4 +6,4 @@ Login happens inside an application-owned WebView2 profile. NovaClip does not re
 
 Task manifests persist only non-secret request metadata needed for recovery, such as Referer, Origin, User-Agent and the observed PlayURL endpoint. Cookie and Authorization values are rejected from durable metadata and redacted from diagnostics.
 
-The update checker requests the configured GitHub Releases endpoint anonymously. A developer may optionally provide a private-repository token through `NOVACLIP_GITHUB_TOKEN`; NovaClip does not persist that token. Update packages are checked by the GitHub digest and signed manifest before handoff.
+The update checker requests the configured GitHub Releases endpoint anonymously. A developer may optionally provide a private-repository token through `NOVACLIP_GITHUB_TOKEN`; NovaClip does not persist that token. Update packages are downloaded from trusted GitHub HTTPS URLs and checked against the declared size and GitHub SHA-256 digest before handoff.
