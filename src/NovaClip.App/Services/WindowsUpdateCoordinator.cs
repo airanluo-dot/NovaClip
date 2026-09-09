@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Security.Cryptography;
 using NovaClip.Core;
 using NovaClip.Infrastructure;
 
@@ -8,25 +7,18 @@ namespace NovaClip.App;
 
 public sealed class WindowsUpdateCoordinator : IDisposable
 {
-    private const int MaxSignedManifestCharacters = 1_000_000;
-    private const int MaxSignatureCharacters = 16_384;
     private readonly IUpdateService _updateService;
     private readonly WindowsSettingsStore _settings;
-    private readonly string _trustedPublicKeyPem;
     private readonly SemaphoreSlim _applyGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
     private int _disposed;
 
     public WindowsUpdateCoordinator(
         IUpdateService updateService,
-        WindowsSettingsStore settings,
-        string? trustedPublicKeyPem = null)
+        WindowsSettingsStore settings)
     {
         _updateService = updateService ?? throw new ArgumentNullException(nameof(updateService));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-        _trustedPublicKeyPem = string.IsNullOrWhiteSpace(trustedPublicKeyPem)
-            ? SignedUpdateTrustPolicy.PublicKeyPem
-            : trustedPublicKeyPem;
     }
 
     public AppUpdateInfo? LatestUpdate { get; private set; }
@@ -83,7 +75,6 @@ public sealed class WindowsUpdateCoordinator : IDisposable
 
             Directory.CreateDirectory(tempRoot);
             var downloadedPath = Path.Combine(tempRoot, asset.Name);
-            await VerifySignedReleaseAsync(update, asset, packageType, tempRoot, progress, linked.Token).ConfigureAwait(false);
             await _updateService.DownloadAssetAsync(asset, downloadedPath, progress, linked.Token).ConfigureAwait(false);
 
             var info = new ProcessStartInfo(updater)
@@ -137,80 +128,6 @@ public sealed class WindowsUpdateCoordinator : IDisposable
         {
             if (!handedOff) TryDeleteDirectory(tempRoot);
             _applyGate.Release();
-        }
-    }
-
-    private async Task VerifySignedReleaseAsync(
-        AppUpdateInfo update,
-        AppUpdateAsset selectedAsset,
-        string packageType,
-        string tempRoot,
-        IProgress<double>? progress,
-        CancellationToken cancellationToken)
-    {
-        var manifestAsset = update.SignedManifestAsset;
-        var signatureAsset = update.SignedManifestSignatureAsset;
-        if (manifestAsset is null || signatureAsset is null)
-        {
-            throw new InvalidDataException("更新发布缺少签名清单或签名文件，已拒绝执行。");
-        }
-
-        if (manifestAsset.Size is not long manifestSize ||
-            manifestSize <= 0 ||
-            manifestSize > MaxSignedManifestCharacters ||
-            signatureAsset.Size is not long signatureSize ||
-            signatureSize <= 0 ||
-            signatureSize > MaxSignatureCharacters)
-        {
-            throw new InvalidDataException("签名清单大小声明无效，已拒绝执行。");
-        }
-
-        var manifestPath = Path.Combine(tempRoot, manifestAsset.Name);
-        var signaturePath = Path.Combine(tempRoot, signatureAsset.Name);
-        await _updateService.DownloadAssetAsync(manifestAsset, manifestPath, progress, cancellationToken).ConfigureAwait(false);
-        await _updateService.DownloadAssetAsync(signatureAsset, signaturePath, progress, cancellationToken).ConfigureAwait(false);
-
-        var manifestJson = await File.ReadAllTextAsync(manifestPath, cancellationToken).ConfigureAwait(false);
-        var signature = await File.ReadAllTextAsync(signaturePath, cancellationToken).ConfigureAwait(false);
-        if (manifestJson.Length > MaxSignedManifestCharacters || signature.Length > MaxSignatureCharacters)
-        {
-            throw new InvalidDataException("签名清单大小超过安全上限，已拒绝执行。");
-        }
-
-        if (!SignedUpdateManifestVerifier.Verify(
-                manifestJson,
-                signature.Trim(),
-                _trustedPublicKeyPem,
-                out var manifest,
-                out var error))
-        {
-            throw new InvalidDataException(error ?? "签名清单验证失败，已拒绝执行。");
-        }
-
-        var expectedChannel = update.IsPrerelease ? "preview" : "stable";
-        if (!SemanticVersion.TryParse(update.Version, out var updateVersion) ||
-            !SemanticVersion.TryParse(manifest!.Version, out var manifestVersion) ||
-            updateVersion.CompareTo(manifestVersion) != 0 ||
-            !string.Equals(manifest.Channel, expectedChannel, StringComparison.Ordinal) ||
-            !string.Equals(manifest.KeyId, SignedUpdateTrustPolicy.KeyId, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("签名清单版本或发布通道不匹配，已拒绝执行。");
-        }
-
-        var signedAsset = manifest.Assets.FirstOrDefault(item =>
-            string.Equals(item.Name, selectedAsset.Name, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(item.RuntimeIdentifier, "win-x64", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(item.PackageType, packageType, StringComparison.OrdinalIgnoreCase));
-        var expectedDigest = GitHubReleaseUpdateService.ParseSha256Digest(selectedAsset.Digest);
-        if (signedAsset is null ||
-            selectedAsset.Size is not long selectedSize ||
-            expectedDigest is null ||
-            signedAsset.Size != selectedSize ||
-            !CryptographicOperations.FixedTimeEquals(
-                Convert.FromHexString(signedAsset.Sha256),
-                expectedDigest))
-        {
-            throw new InvalidDataException("签名清单中的更新资产与 GitHub Release 资产不匹配，已拒绝执行。");
         }
     }
 

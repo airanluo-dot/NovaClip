@@ -14,6 +14,6 @@
 - A final output is never selected by existence checks alone: an atomic marker reservation protects concurrent tasks, and stale markers are reclaimed only when their owner is no longer alive.
 - Download work has a separate lifecycle owner from the UI. Durable operation state, atomic task/resume metadata and an outbox make restart/replay explicit.
 - The old `BiliNative.*` source and solution are retired. A legacy `.bilinative` task root may be read for migration compatibility, but new work uses `.novaclip`.
-- Updates require both the GitHub asset `sha256:` digest and an independently signed manifest bound to the embedded public key ID `novaclip-beta7-2026`.
+- Updates require a trusted GitHub HTTPS asset, a positive declared size and a matching GitHub `sha256:` digest before updater handoff.
 - Portable update rollback journals each completed backup. An interrupted backup cannot cause the updater to delete an old file that was never backed up.
 - SDK, package versions and GitHub Actions references are pinned; dependency policy and NuGet audit run in CI. FFmpeg remains an external, separately licensed Windows dependency.

@@ -7,7 +7,7 @@ dotnet restore NovaClip.slnx
 dotnet test NovaClip.slnx -c Release
 ```
 
-The tests cover filename sanitization, semantic versions, legal task transitions, 200/206 resume behavior, validator changes and total-length changes, backup URL fallback, DASH/DURL normalization, concurrent output reservations, output collision safety, SQLite keyset pagination/migration/recovery, durable download state, bridge schema validation, signed update manifests, package extraction limits and portable updater rollback.
+The tests cover filename sanitization, semantic versions, legal task transitions, 200/206 resume behavior, validator changes and total-length changes, backup URL fallback, DASH/DURL normalization, concurrent output reservations, output collision safety, SQLite keyset pagination/migration/recovery, durable download state, bridge schema validation, GitHub asset digest validation, package extraction limits and portable updater rollback.
 
 ## Windows CI acceptance
 
@@ -20,7 +20,7 @@ The Windows workflow performs all of these steps before a prerelease is publishe
 5. Verify `resources.pri`, `NovaClip.exe`, package manifest hashes, version and runtime identity.
 6. Launch the actual published executable and require `App.StartupCompleted`, `Shell.Ready`, every top-level page marker and `WebView2.Ready`.
 7. Build the Inno Setup installer, hash deliverables and upload the ZIP/installer.
-8. On the exact beta.7 tag, require the signing secret, sign the update manifest and publish the prerelease.
+8. On the exact beta.7 tag, hash the deliverables, upload the ZIP/installer, and publish the prerelease only after the Windows gate is green.
 
 ## Windows real-device acceptance
 
