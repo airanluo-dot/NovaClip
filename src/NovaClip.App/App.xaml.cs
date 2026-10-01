@@ -69,7 +69,7 @@ public partial class App : Application
             MainWindow.DispatcherQueue.TryEnqueue(() => ApplyActivationArgument(launchArgument));
             if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") == "1")
             {
-                MainWindow.DispatcherQueue.TryEnqueue(MainWindow.RunSmokeNavigation);
+                await MainWindow.RunSmokeNavigationAsync();
             }
 
             StartupDiagnostics.Info("App.StartupCompleted");

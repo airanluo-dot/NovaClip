@@ -91,7 +91,7 @@ jobs:
           $env:NOVACLIP_CI_SMOKE = "1"
           $process = Start-Process $exe -PassThru
           $deadline = (Get-Date).AddSeconds(60)
-          $markers = @("App.StartupCompleted", "Shell.Ready", "BrowserPage.Ready", "DownloadsPage.Ready", "HistoryPage.Ready", "SettingsPage.Ready", "WebView2.Ready")
+          $markers = @("App.StartupCompleted", "Shell.Ready", "BrowserPage.Ready", "DownloadsPage.Ready", "HistoryPage.Ready", "SettingsPage.Ready", "WebView2.Ready", "Browser.CacheOwnershipVerified")
           do {
             Start-Sleep -Seconds 2
             $text = if (Test-Path $log) { Get-Content $log -Raw } else { "" }

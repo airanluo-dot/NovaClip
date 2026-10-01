@@ -79,6 +79,7 @@ public sealed partial class BrowserPage : Page
     private async void BrowserPage_Loaded(object sender, RoutedEventArgs e)
     {
         Current = this;
+        Instance = this;
         StartupDiagnostics.Info("BrowserPage.Loaded");
         StartupDiagnostics.Info("BrowserPage.InitializeRequested");
         _initializationTask ??= InitializeWebViewAsync();
@@ -97,7 +98,8 @@ public sealed partial class BrowserPage : Page
     private void BrowserPage_Unloaded(object sender, RoutedEventArgs e)
     {
         if (ReferenceEquals(Current, this)) Current = null;
-        if (ReferenceEquals(Instance, this)) Instance = null;
+        // The navigation cache still owns this page and its live WebView.
+        // Settings and external activation must retain access while it is hidden.
     }
 
     internal static Task VerifyEnvironmentAsync() => BrowserWebViewEnvironment.VerifyAsync();
@@ -607,6 +609,8 @@ public sealed partial class BrowserPage : Page
 
     public async Task ClearSessionAsync()
     {
+        // Do not delete a profile directory while WebView initialization owns it.
+        if (_initializationTask is { } initialization) await initialization;
         var core = BrowserWebView.CoreWebView2;
         if (core is null) return;
 

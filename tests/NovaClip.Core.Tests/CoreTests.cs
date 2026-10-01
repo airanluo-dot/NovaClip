@@ -48,6 +48,10 @@ public sealed class CoreTests
     [InlineData("1.0.0-", false)]
     [InlineData("1.01.0", false)]
     [InlineData("1.0.0+build", true)]
+    [InlineData("1.0.0+001", true)]
+    [InlineData("1.0.0-beta.8+build.001", true)]
+    [InlineData("1.0.0-beta.08", false)]
+    [InlineData("1.0.0+build..001", false)]
     public void SemanticVersionParserRejectsMalformedCoreAndAcceptsBuildMetadata(string value, bool expected)
     {
         Assert.Equal(expected, SemanticVersion.TryParse(value, out _));

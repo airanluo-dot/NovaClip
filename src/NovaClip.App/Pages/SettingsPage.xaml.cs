@@ -106,7 +106,7 @@ public sealed partial class SettingsPage : Page
             var dialog = new ContentDialog { XamlRoot = XamlRoot, Title = _text.GetString("Settings_ClearLoginTitle"), Content = _text.GetString("Settings_ClearLoginMessage"), PrimaryButtonText = _text.GetString("Common_Clear"), CloseButtonText = _text.GetString("Common_Cancel"), DefaultButton = ContentDialogButton.Close };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
             var page = BrowserPage.Instance;
-            if (page?.HasInitializedWebView == true)
+            if (page is not null)
             {
                 await page.ClearSessionAsync();
             }

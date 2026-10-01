@@ -21,7 +21,7 @@ public readonly record struct SemanticVersion(int Major, int Minor, int Patch, s
         var plusIndex = normalized.IndexOf('+');
         if (plusIndex >= 0)
         {
-            if (!IsIdentifierList(normalized[(plusIndex + 1)..])) return false;
+            if (!IsIdentifierList(normalized[(plusIndex + 1)..], allowNumericLeadingZeros: true)) return false;
             normalized = normalized[..plusIndex];
         }
 
@@ -93,12 +93,13 @@ public readonly record struct SemanticVersion(int Major, int Minor, int Patch, s
         return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out number);
     }
 
-    private static bool IsIdentifierList(string value) => value.Length > 0 && value.Split('.').All(IsIdentifier);
+    private static bool IsIdentifierList(string value, bool allowNumericLeadingZeros = false) =>
+        value.Length > 0 && value.Split('.').All(part => IsIdentifier(part, allowNumericLeadingZeros));
 
-    private static bool IsIdentifier(string value)
+    private static bool IsIdentifier(string value, bool allowNumericLeadingZeros)
     {
         if (value.Length == 0 || !value.All(character => char.IsAsciiLetterOrDigit(character) || character == '-')) return false;
-        return !IsNumericIdentifier(value) || value.Length == 1 || value[0] != '0';
+        return allowNumericLeadingZeros || !IsNumericIdentifier(value) || value.Length == 1 || value[0] != '0';
     }
 
     private static bool IsNumericIdentifier(string value) => value.Length > 0 && value.All(char.IsAsciiDigit);

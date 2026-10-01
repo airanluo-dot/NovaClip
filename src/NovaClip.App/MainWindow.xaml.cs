@@ -45,9 +45,18 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    public void RunSmokeNavigation()
+    public async Task RunSmokeNavigationAsync()
     {
-        foreach (var tag in new[] { "downloads", "history", "settings", "browser" }) NavigateTo(tag);
+        var browser = Pages.BrowserPage.Instance ?? throw new InvalidOperationException("BROWSER_CACHE_MISSING");
+        foreach (var tag in new[] { "downloads", "history", "settings", "browser" })
+        {
+            NavigateTo(tag);
+            // Allow Loaded/Unloaded to run before checking cached ownership.
+            await Task.Delay(100);
+            if (!ReferenceEquals(Pages.BrowserPage.Instance, browser))
+                throw new InvalidOperationException("BROWSER_CACHE_OWNERSHIP_LOST");
+        }
+        StartupDiagnostics.Info("Browser.CacheOwnershipVerified");
     }
 
     public void ApplyTheme(string theme)
