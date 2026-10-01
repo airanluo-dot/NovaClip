@@ -52,7 +52,7 @@ public sealed partial class MainWindow : Window
         {
             NavigateTo(tag);
             // Allow Loaded/Unloaded to run before checking cached ownership.
-            await Task.Delay(100);
+            await Task.Delay(700);
             if (!ReferenceEquals(Pages.BrowserPage.Instance, browser))
                 throw new InvalidOperationException("BROWSER_CACHE_OWNERSHIP_LOST");
             if (tag != "browser") await CaptureSmokePageAsync(tag);
@@ -66,7 +66,8 @@ public sealed partial class MainWindow : Window
         try
         {
             var bitmap = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
-            await bitmap.RenderAsync(ContentFrame);
+            ContentFrame.UpdateLayout();
+            await bitmap.RenderAsync(ContentFrame.Content as UIElement ?? ContentFrame);
             if (bitmap.PixelWidth == 0 || bitmap.PixelHeight == 0)
                 throw new InvalidOperationException("UI_CAPTURE_EMPTY");
             var pixels = await bitmap.GetPixelsAsync();
