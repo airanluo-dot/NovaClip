@@ -80,6 +80,7 @@ public sealed partial class HistoryPage : Page
         finally
         {
             _loading = false;
+            EmptyState.Visibility = _items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 

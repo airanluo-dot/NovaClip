@@ -1,8 +1,36 @@
 <Page x:Class="NovaClip.App.Pages.DownloadsPage" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <Grid Padding="24" RowSpacing="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <TextBlock x:Uid="Downloads_Title" Style="{ThemeResource TitleTextBlockStyle}" />
-    <Grid Grid.Row="1"><TextBlock x:Uid="Downloads_Empty" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.7" />
-      <ListView x:Name="TaskList" SelectionMode="Single"><ListView.ItemTemplate><DataTemplate><Grid Padding="8" ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="4"><TextBlock Text="{Binding Title}" FontWeight="SemiBold"/><TextBlock Text="{Binding StateText}" Opacity="0.7"/><ProgressBar Value="{Binding ProgressFraction}" Maximum="1"/></StackPanel><CommandBar Grid.Column="1" DefaultLabelPosition="Right"><AppBarButton x:Uid="Downloads_PauseResume" Click="PauseResumeButton_Click" Icon="Pause"/><AppBarButton x:Uid="Downloads_Cancel" Click="CancelButton_Click" Icon="Cancel"/></CommandBar></Grid></DataTemplate></ListView.ItemTemplate></ListView>
-    </Grid><InfoBar x:Name="StatusBar" Grid.Row="2" IsOpen="False" IsClosable="True"/><TextBlock x:Name="StatusText" Grid.Row="2" Visibility="Collapsed"/>
-  </Grid>
+    <Grid Padding="28,24" RowSpacing="20">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock x:Uid="Downloads_Title" Style="{StaticResource PageHeadingStyle}" />
+        <Grid Grid.Row="1">
+            <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16" IsHitTestVisible="False">
+                <Border Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="24" Width="80" Height="80" HorizontalAlignment="Center">
+                    <FontIcon Glyph="&#xE896;" FontSize="32" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </Border>
+                <TextBlock x:Uid="Downloads_Empty" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="320" />
+            </StackPanel>
+            <ListView x:Name="TaskList" SelectionMode="Single" Background="Transparent" ItemContainerStyle="{StaticResource DownloadListItemStyle}">
+                <ListView.ItemTemplate><DataTemplate>
+                    <Border Style="{StaticResource SurfaceCardStyle}">
+                        <Grid ColumnSpacing="16" RowSpacing="12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Border Width="44" Height="44" CornerRadius="12" Background="{ThemeResource SubtleFillColorSecondaryBrush}" VerticalAlignment="Top"><FontIcon Glyph="&#xE714;" FontSize="20"/></Border>
+                            <StackPanel Grid.Column="1" Spacing="6">
+                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="15" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Title}"/>
+                                <TextBlock Text="{Binding StateText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12"/>
+                                <ProgressBar Value="{Binding ProgressFraction}" Maximum="1" Height="4" MinHeight="4" Margin="0,6,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                                <Button Content="{Binding PauseResumeText}" IsEnabled="{Binding CanPauseResume}" Click="PauseResumeButton_Click" MinWidth="80"/>
+                                <Button x:Uid="Downloads_CancelAction" IsEnabled="{Binding CanCancel}" Click="CancelButton_Click" MinWidth="80"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </DataTemplate></ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+        <InfoBar x:Name="StatusBar" Grid.Row="2" IsOpen="False" IsClosable="True"/>
+        <TextBlock x:Name="StatusText" Grid.Row="2" Visibility="Collapsed"/>
+    </Grid>
 </Page>

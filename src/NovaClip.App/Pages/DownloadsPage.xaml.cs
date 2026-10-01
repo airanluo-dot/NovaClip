@@ -36,6 +36,7 @@ public sealed partial class DownloadsPage : Page
         var row = new DownloadRow(snapshot);
         _rowById[snapshot.Id] = row;
         _rows.Add(row);
+        EmptyState.Visibility = Visibility.Collapsed;
     }
 
     private void DownloadsPage_Loaded(object sender, RoutedEventArgs e)
@@ -132,6 +133,13 @@ public sealed partial class DownloadsPage : Page
                 return string.IsNullOrWhiteSpace(localized) ? State.ToString() : localized;
             }
         }
+        public bool CanPauseResume => State is DownloadTaskState.Paused or DownloadTaskState.Failed
+            or DownloadTaskState.Queued or DownloadTaskState.Resolving
+            or DownloadTaskState.DownloadingVideo or DownloadTaskState.DownloadingAudio
+            or DownloadTaskState.DownloadingSegments;
+        public bool CanCancel => State is not (DownloadTaskState.Completed or DownloadTaskState.Cancelled);
+        public string PauseResumeText => Text.GetString(State is DownloadTaskState.Paused or DownloadTaskState.Failed
+            ? "Downloads_ResumeAction" : "Downloads_PauseAction");
         public string? ErrorMessage => Snapshot.ErrorMessage;
         public double ProgressFraction => Snapshot.TotalBytes is > 0
             ? Math.Clamp((double)Snapshot.DownloadedBytes / Snapshot.TotalBytes.Value, 0, 1)
