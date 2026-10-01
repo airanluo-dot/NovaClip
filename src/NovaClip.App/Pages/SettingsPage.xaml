@@ -77,6 +77,7 @@
                         <RadioButton x:Uid="Settings_Preview" Tag="Preview" />
                     </RadioButtons>
                     <Button x:Uid="Settings_CheckUpdate" Click="CheckUpdate_Click" HorizontalAlignment="Left" />
+                <HyperlinkButton x:Uid="Settings_OpenReleases" NavigateUri="https://github.com/airanluo-dot/NovaClip/releases" HorizontalAlignment="Left" />
                 </StackPanel>
             </Expander>
             <Expander x:Uid="Settings_Advanced" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
@@ -88,7 +89,7 @@
             </Expander>
             <Expander x:Uid="Settings_About" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                 <StackPanel Padding="4,8,4,12" Spacing="16">
-                    <TextBlock x:Uid="Settings_Version" />
+                    <TextBlock x:Name="VersionText" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                 </StackPanel>
             </Expander>
             <InfoBar x:Name="SettingsInfoBar" IsOpen="False" IsClosable="True" />

@@ -14,6 +14,7 @@ public sealed partial class SettingsPage : Page
     public SettingsPage()
     {
         InitializeComponent();
+        VersionText.Text = _text.Format("Settings_VersionFormat", AppServices.CurrentVersion.Split('+')[0]);
         Loaded += SettingsPage_Loaded;
     }
 
