@@ -21,6 +21,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
 
     private readonly HttpClient _httpClient;
     private readonly RetryExecutor _retryExecutor;
+    public DownloadConnectionBudget Connections { get; } = new();
 
     public HttpRangeDownloader(HttpClient? httpClient = null, RetryExecutor? retryExecutor = null)
     {
@@ -237,8 +238,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             {
                 if (track.Type == TrackType.File && requestHeaders is null)
                 {
-                    var parallel = new ParallelHttpFileDownloader(_httpClient);
-                    var result = await parallel.TryDownloadAsync(candidateUri, destinationPath, 4, retryPolicy, progress, cancellationToken).ConfigureAwait(false);
+                    var parallel = new ParallelHttpFileDownloader(_httpClient, connectionBudget: Connections);
+                    var result = await parallel.TryDownloadAsync(candidateUri, destinationPath, Connections.Limit, retryPolicy, progress, cancellationToken).ConfigureAwait(false);
                     if (result is long size) return size;
                 }
                 return await _retryExecutor.ExecuteAsync(
@@ -284,6 +285,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             ApplyIfRange(request, metadata);
         }
 
+        using var lease = await Connections.AcquireAsync(cancellationToken).ConfigureAwait(false);
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.PartialContent)
         {

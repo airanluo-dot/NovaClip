@@ -22,6 +22,7 @@ public sealed partial class SettingsPage : Page
     {
         var settings = AppServices.Settings;
         DownloadDirectoryText.Text = settings.DownloadDirectory;
+        DownloadConnectionsBox.Value = settings.MaxDownloadConnections;
         ConcurrencyButtons.SelectedItem = FindByTag(ConcurrencyButtons.Items, settings.MaxConcurrentTasks.ToString(CultureInfo.InvariantCulture));
         QualityBox.SelectedItem = FindByTag(QualityBox.Items, settings.DefaultQuality);
         CodecBox.SelectedItem = FindByTag(CodecBox.Items, settings.DefaultCodec);
@@ -35,6 +36,17 @@ public sealed partial class SettingsPage : Page
         ChannelButtons.SelectedItem = FindByTag(ChannelButtons.Items, settings.UpdateChannel.ToString());
         ThemeBox.SelectedItem = FindByTag(ThemeBox.Items, settings.Theme);
         RefreshFfmpegStatus();
+        _loading = false;
+    }
+
+    private void DownloadConnections_Changed(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_loading || !double.IsFinite(sender.Value)) return;
+        var value = (int)Math.Clamp(Math.Round(sender.Value), 1, 256);
+        try { AppServices.SettingsCoordinator.Apply(settings => settings.MaxDownloadConnections = value); }
+        catch (Exception exception) { ShowSettingsError("SETTINGS_SAVE_FAILED", exception); }
+        _loading = true;
+        sender.Value = AppServices.Settings.MaxDownloadConnections;
         _loading = false;
     }
 

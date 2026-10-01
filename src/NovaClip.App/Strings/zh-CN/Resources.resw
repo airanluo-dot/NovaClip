@@ -33,4 +33,6 @@
   <data name="DirectFile_Invalid" xml:space="preserve"><value>请输入有效链接、完整文件夹路径和合法文件名。</value></data>
   <data name="DirectFile_FolderFailed" xml:space="preserve"><value>无法选择文件夹，请重试。</value></data>
   <data name="DirectFile_CreateFailed" xml:space="preserve"><value>无法创建下载，请检查保存位置及权限后重试。</value></data>
+<data name="Settings_DownloadConnections.Header" xml:space="preserve"><value>下载连接总上限（1–256）</value></data>
+<data name="Settings_DownloadConnectionsHint.Text" xml:space="preserve"><value>所有下载共享此上限，默认64。大文件按需分段，小文件或不支持分段的服务器仍用单连接；过多连接可能导致卡顿或服务器限流。</value></data>
 </root>

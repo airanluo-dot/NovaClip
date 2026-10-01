@@ -22,11 +22,12 @@ public sealed record WindowsSettingsSnapshot(
     UpdateChannel UpdateChannel,
     string UpdateFeedRepository,
     string Theme,
-    string? LastBrowserUrl = null);
+    string? LastBrowserUrl = null,
+    int MaxDownloadConnections = 64);
 
 public sealed class WindowsSettingsStore
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
     private const int MaxSettingsBytes = 1_000_000;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly object _saveGate = new();
@@ -37,6 +38,7 @@ public sealed class WindowsSettingsStore
 
     public string DownloadDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
     public int MaxConcurrentTasks { get; set; } = 2;
+    public int MaxDownloadConnections { get; set; } = 64;
     public int MaxRetryAttempts { get; set; } = 3;
     public string DefaultQuality { get; set; } = "Highest";
     public string DefaultCodec { get; set; } = "Auto";
@@ -68,6 +70,7 @@ public sealed class WindowsSettingsStore
 
             if (!string.IsNullOrWhiteSpace(document.DownloadDirectory) && Path.IsPathRooted(document.DownloadDirectory)) DownloadDirectory = document.DownloadDirectory;
             MaxConcurrentTasks = Math.Clamp(document.MaxConcurrentTasks, 1, 3);
+            MaxDownloadConnections = Math.Clamp(document.MaxDownloadConnections, 1, 256);
             MaxRetryAttempts = Math.Clamp(document.MaxRetryAttempts, 1, 8);
             DefaultQuality = document.DefaultQuality ?? DefaultQuality;
             DefaultCodec = document.DefaultCodec ?? DefaultCodec;
@@ -111,13 +114,15 @@ public sealed class WindowsSettingsStore
             UpdateChannel,
             UpdateFeedRepository,
             Theme,
-            LastBrowserUrl);
+            LastBrowserUrl,
+            MaxDownloadConnections);
 
     public void Restore(WindowsSettingsSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         DownloadDirectory = snapshot.DownloadDirectory;
         MaxConcurrentTasks = snapshot.MaxConcurrentTasks;
+        MaxDownloadConnections = snapshot.MaxDownloadConnections;
         MaxRetryAttempts = snapshot.MaxRetryAttempts;
         DefaultQuality = snapshot.DefaultQuality;
         DefaultCodec = snapshot.DefaultCodec;
@@ -138,7 +143,7 @@ public sealed class WindowsSettingsStore
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(DownloadDirectory) || !Path.IsPathRooted(DownloadDirectory)) throw new InvalidDataException("The download directory must be absolute.");
-        if (MaxConcurrentTasks is < 1 or > 3 || MaxRetryAttempts is < 1 or > 8) throw new InvalidDataException("The download limits are outside the supported range.");
+        if (MaxConcurrentTasks is < 1 or > 3 || MaxDownloadConnections is < 1 or > 256 || MaxRetryAttempts is < 1 or > 8) throw new InvalidDataException("The download limits are outside the supported range.");
         if (DefaultQuality is not ("Highest" or "Player" or "1080P" or "720P")) throw new InvalidDataException("The default quality is invalid.");
         if (DefaultCodec is not ("Auto" or "AVC" or "HEVC" or "AV1")) throw new InvalidDataException("The default codec is invalid.");
         if (RetryPreset is not ("Standard" or "Aggressive" or "Off")) throw new InvalidDataException("The retry preset is invalid.");
@@ -178,7 +183,8 @@ public sealed class WindowsSettingsStore
                     ExternalLinkBehavior,
                     DebugLogging,
                     Theme,
-                    LastBrowserUrl);
+                    LastBrowserUrl,
+            MaxDownloadConnections);
                 var json = JsonSerializer.Serialize(document, JsonOptions);
                 var tempPath = _settingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
@@ -251,5 +257,6 @@ public sealed class WindowsSettingsStore
         string? ExternalLinkBehavior = null,
         bool DebugLogging = false,
         string? Theme = null,
-        string? LastBrowserUrl = null);
+        string? LastBrowserUrl = null,
+        int MaxDownloadConnections = 64);
 }

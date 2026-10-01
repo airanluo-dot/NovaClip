@@ -12,7 +12,7 @@ public static class HttpByteRangePlanner
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(minimumPartSize);
-        var count = (int)Math.Min(Math.Clamp(connections, 1, 16), Math.Max(1, length / minimumPartSize));
+        var count = (int)Math.Min(Math.Clamp(connections, 1, DownloadConnectionBudget.Maximum), Math.Max(1, length / minimumPartSize));
         var quotient = length / count;
         var remainder = length % count;
         var ranges = new ByteRange[count];

@@ -6,10 +6,11 @@ using NovaClip.Core;
 namespace NovaClip.Infrastructure;
 
 /// <summary>Independent HTTP range transport for a private, per-task staging path.</summary>
-public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idleTimeout = null)
+public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idleTimeout = null, DownloadConnectionBudget? connectionBudget = null)
 {
     private const int BufferSize = 128 * 1024;
     private readonly RetryExecutor _retry = new();
+    private readonly DownloadConnectionBudget _connections = connectionBudget ?? new();
     private readonly TimeSpan _idleTimeout = ValidateTimeout(idleTimeout ?? TimeSpan.FromSeconds(30));
 
     private static TimeSpan ValidateTimeout(TimeSpan timeout) => timeout > TimeSpan.Zero && timeout <= TimeSpan.FromMinutes(10)
@@ -34,6 +35,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
         if (uri.Scheme is not ("http" or "https")) throw new ArgumentException("HTTP(S) is required.", nameof(uri));
         if (!Path.IsPathRooted(stagingPath)) throw new ArgumentException("An absolute staging path is required.", nameof(stagingPath));
         if (connections <= 1) return null;
+        using var probeLease = await _connections.AcquireAsync(cancellationToken).ConfigureAwait(false);
         using var probe = NewRequest(uri, 0, 0);
         using var head = await WithIdleDeadlineAsync(token => client.SendAsync(probe, HttpCompletionOption.ResponseHeadersRead, token), cancellationToken).ConfigureAwait(false);
         var range = head.Content.Headers.ContentRange;
@@ -42,6 +44,8 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
             range.From != 0 || range.To != 0 || range.Length is not > 0 ||
             tag is null || tag.IsWeak || HasEncoding(head)) return null;
         var length = range.Length.Value;
+        head.Dispose();
+        probeLease.Dispose();
         var ranges = HttpByteRangePlanner.Create(length, connections);
         if (ranges.Count <= 1) return null;
         var cache = stagingPath + ".ranges";
@@ -54,7 +58,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
         if (!sameIdentity)
         {
             // Only known part files in this task's private staging directory are touched.
-            for (var index = 0; index < 16; index++) File.Delete(PartPath(cache, index));
+            for (var index = 0; index < DownloadConnectionBudget.Maximum; index++) File.Delete(PartPath(cache, index));
             await File.WriteAllTextAsync(metadataPath + ".tmp", identityText, cancellationToken).ConfigureAwait(false);
             File.Move(metadataPath + ".tmp", metadataPath, true);
         }
@@ -101,6 +105,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
                     var file = PartPath(cache, index);
                     var existing = File.Exists(file) ? new FileInfo(file).Length : 0;
                     if (existing == part.Length) return existing;
+                    using var lease = await _connections.AcquireAsync(token).ConfigureAwait(false);
                     using var request = NewRequest(uri, part.From + existing, part.To);
                     request.Headers.IfRange = new RangeConditionHeaderValue(tag);
                     using var response = await WithIdleDeadlineAsync(readToken => client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, readToken), token).ConfigureAwait(false);
