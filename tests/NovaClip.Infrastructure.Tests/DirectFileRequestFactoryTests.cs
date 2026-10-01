@@ -28,6 +28,11 @@ public sealed class DirectFileRequestFactoryTests
     [Theory]
     [InlineData("../file.zip")]
     [InlineData("CON.zip")]
+    [InlineData("CON.zip.exe")]
+    [InlineData("aux.data.backup")]
+    [InlineData("COM¹.txt")]
+    [InlineData("LPT².zip")]
+    [InlineData("CONIN$.txt")]
     [InlineData("file.zip.")]
     [InlineData("a:b.zip")]
     public void RejectsUnsafeNames(string name) => Assert.Throws<ArgumentException>(() =>
