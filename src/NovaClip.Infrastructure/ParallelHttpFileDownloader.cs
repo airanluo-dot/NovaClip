@@ -61,11 +61,17 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
             if (size > ranges[index].Length) File.Delete(file);
             else completed[index] = size;
         }
-        progress?.Report(new TrackProgress(TrackType.File, completed.Sum(), length));
+        var resumedBytes = completed.Sum();
+        var transferClock = System.Diagnostics.Stopwatch.StartNew();
+        progress?.Report(new TrackProgress(TrackType.File, resumedBytes, length));
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var rejected = 0;
-        var tasks = ranges.Select((part, index) => DownloadPartWithRetryAsync(part, index)).ToArray();
-        try { await Task.WhenAll(tasks).ConfigureAwait(false); }
+        long CompletedBytes() { lock (gate) return completed.Sum(); }
+        try
+        {
+            await AdaptiveDownloadScheduler.RunAsync(ranges.Count, connections,
+                index => DownloadPartWithRetryAsync(ranges[index], index), CompletedBytes, stop.Token).ConfigureAwait(false);
+        }
         catch when (Volatile.Read(ref rejected) != 0 && !cancellationToken.IsCancellationRequested)
         {
             File.Delete(metadataPath);
@@ -120,7 +126,10 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
                         lock (gate)
                         {
                             completed[index] = existing;
-                            progress?.Report(new TrackProgress(TrackType.File, completed.Sum(), length));
+                            var total = completed.Sum();
+                            var speed = transferClock.Elapsed.TotalSeconds > 0
+                                ? (total - resumedBytes) / transferClock.Elapsed.TotalSeconds : 0;
+                            progress?.Report(new TrackProgress(TrackType.File, total, length, speed));
                         }
                     }
                     await output.FlushAsync(token).ConfigureAwait(false);
