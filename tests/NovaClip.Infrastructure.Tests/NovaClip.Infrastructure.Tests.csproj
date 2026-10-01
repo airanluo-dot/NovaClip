@@ -5,6 +5,7 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/NovaClip.App/Services/WindowsUpdateCoordinator.cs" Link="WindowsUpdateCoordinator.cs" />
     <ProjectReference Include="..\..\src\NovaClip.Infrastructure\NovaClip.Infrastructure.csproj" />
     <PackageReference Include="xunit" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
