@@ -54,10 +54,11 @@ public sealed class OutputReservationService : IOutputReservationService
                 // Retry the same candidate after a stale marker is removed.
                 if (TryReclaimStaleMarker(markerPath)) index--;
             }
-            catch (UnauthorizedAccessException) when (IsMarkerCollision(markerPath))
+            catch (UnauthorizedAccessException) when (IsMarkerCollision(markerPath) || PathExists(outputPath))
             {
-                // Windows may report a sharing conflict on a marker as access denied.
-                // Treat an existing marker as a reservation collision, not as a permission grant.
+                // A concurrent commit may remove its marker between CreateNew failing and
+                // this filter running. Its committed output is also collision evidence.
+                // Real directory permission failures still propagate when neither exists.
                 if (TryReclaimStaleMarker(markerPath)) index--;
             }
         }
