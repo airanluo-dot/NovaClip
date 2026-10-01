@@ -102,6 +102,12 @@ jobs:
           foreach ($marker in $markers) { if ($text -notmatch [regex]::Escape($marker)) { Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force; throw "SMOKE_MARKER_MISSING:" + $marker } }
           if ($text -match "APP_STARTUP_FAILED|XamlParseException|NAVIGATION_FAILED") { Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force; throw "SMOKE_STARTUP_ERROR" }
           Get-Process NovaClip -ErrorAction SilentlyContinue | Stop-Process -Force
+      - name: Upload native UI captures
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: NovaClip-UI-${{ github.sha }}
+          path: publish/**/ui-smoke/*.png
+          if-no-files-found: warn
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Build installer
