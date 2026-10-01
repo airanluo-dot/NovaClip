@@ -304,7 +304,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             slotAcquired = true;
             if (!await SetStateAsync(work, DownloadTaskState.Resolving, run.RunId).ConfigureAwait(false)) return;
 
-            var progress = new Progress<DownloadProgress>(value =>
+            var progress = new InlineProgress<DownloadProgress>(value =>
             {
                 DownloadTaskSnapshot? snapshot = null;
                 lock (work.Gate)

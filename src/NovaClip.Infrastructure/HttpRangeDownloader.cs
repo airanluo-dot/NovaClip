@@ -72,7 +72,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         var trackTasks = tracks.Select(async item =>
         {
             var type = item.Track.Type == TrackType.Video ? DownloadTaskState.DownloadingVideo : DownloadTaskState.DownloadingAudio;
-            var trackProgress = new Progress<TrackProgress>(value =>
+            var trackProgress = new InlineProgress<TrackProgress>(value =>
             {
                 lock (gate)
                 {
@@ -121,7 +121,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             };
             var segmentPath = Path.Combine(taskRoot, $"segment-{segment.Index:D4}.part");
             var completedBefore = completed;
-            var segmentProgress = new Progress<TrackProgress>(value =>
+            var segmentProgress = new InlineProgress<TrackProgress>(value =>
                 progress.Report(new DownloadProgress(
                     request.TaskId,
                     DownloadTaskState.DownloadingSegments,
