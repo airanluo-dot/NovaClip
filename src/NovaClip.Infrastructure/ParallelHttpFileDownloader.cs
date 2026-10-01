@@ -6,10 +6,23 @@ using NovaClip.Core;
 namespace NovaClip.Infrastructure;
 
 /// <summary>Independent HTTP range transport for a private, per-task staging path.</summary>
-public sealed class ParallelHttpFileDownloader(HttpClient client)
+public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idleTimeout = null)
 {
     private const int BufferSize = 128 * 1024;
     private readonly RetryExecutor _retry = new();
+    private readonly TimeSpan _idleTimeout = ValidateTimeout(idleTimeout ?? TimeSpan.FromSeconds(30));
+
+    private static TimeSpan ValidateTimeout(TimeSpan timeout) => timeout > TimeSpan.Zero && timeout <= TimeSpan.FromMinutes(10)
+        ? timeout : throw new ArgumentOutOfRangeException(nameof(timeout));
+
+    private async Task<T> WithIdleDeadlineAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken token)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(_idleTimeout);
+        try { return await operation(deadline.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException exception) when (!token.IsCancellationRequested && deadline.IsCancellationRequested)
+        { throw new TimeoutException("The download server stopped responding.", exception); }
+    }
     private sealed record Identity(string Url, string ETag, long Length, int Parts);
     private sealed class RangeRejectedException : Exception { }
 
@@ -22,7 +35,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client)
         if (!Path.IsPathRooted(stagingPath)) throw new ArgumentException("An absolute staging path is required.", nameof(stagingPath));
         if (connections <= 1) return null;
         using var probe = NewRequest(uri, 0, 0);
-        using var head = await client.SendAsync(probe, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using var head = await WithIdleDeadlineAsync(token => client.SendAsync(probe, HttpCompletionOption.ResponseHeadersRead, token), cancellationToken).ConfigureAwait(false);
         var range = head.Content.Headers.ContentRange;
         var tag = head.Headers.ETag;
         if (head.StatusCode != HttpStatusCode.PartialContent || range?.Unit != "bytes" ||
@@ -90,7 +103,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client)
                     if (existing == part.Length) return existing;
                     using var request = NewRequest(uri, part.From + existing, part.To);
                     request.Headers.IfRange = new RangeConditionHeaderValue(tag);
-                    using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                    using var response = await WithIdleDeadlineAsync(readToken => client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, readToken), token).ConfigureAwait(false);
                     if (response.StatusCode is HttpStatusCode.OK or HttpStatusCode.RequestedRangeNotSatisfiable)
                         throw new RangeRejectedException();
                     response.EnsureSuccessStatusCode();
@@ -104,7 +117,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client)
                     await using var output = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.Read, BufferSize, FileOptions.Asynchronous);
                     var buffer = new byte[BufferSize];
                     int count;
-                    while ((count = await input.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
+                    while ((count = await WithIdleDeadlineAsync(readToken => input.ReadAsync(buffer.AsMemory(), readToken).AsTask(), token).ConfigureAwait(false)) > 0)
                     {
                         if (count > part.Length - existing) throw new RangeRejectedException();
                         await output.WriteAsync(buffer.AsMemory(0, count), token).ConfigureAwait(false);
@@ -144,7 +157,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client)
     }
     private static bool HasEncoding(HttpResponseMessage response) =>
         response.Content.Headers.ContentEncoding.Any(value => !value.Equals("identity", StringComparison.OrdinalIgnoreCase));
-    private static bool IsTransient(Exception exception) => exception is IOException ||
+    private static bool IsTransient(Exception exception) => exception is IOException or TimeoutException ||
         exception is HttpRequestException { StatusCode: null or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests } ||
         exception is HttpRequestException { StatusCode: >= HttpStatusCode.InternalServerError };
 }

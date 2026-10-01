@@ -73,6 +73,44 @@ public sealed class ParallelHttpFileDownloaderTests
         Assert.False(File.Exists(fixture.Path));
     }
 
+    [Fact]
+    public async Task StalledBodyTimesOutAndDoesNotPublishOutput()
+    {
+        using var fixture = new Fixture("stall-body");
+        var downloader = new ParallelHttpFileDownloader(fixture.Client, TimeSpan.FromMilliseconds(80));
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await Assert.ThrowsAsync<TimeoutException>(() => downloader.TryDownloadAsync(
+            fixture.Uri, fixture.Path, 4, new RetryPolicy(1), null, watchdog.Token));
+        Assert.False(File.Exists(fixture.Path));
+        Assert.True(fixture.Handler.PartRequests > 0);
+    }
+
+    [Fact]
+    public async Task StalledHeadersTimeOut()
+    {
+        using var fixture = new Fixture("stall-headers");
+        var downloader = new ParallelHttpFileDownloader(fixture.Client, TimeSpan.FromMilliseconds(80));
+        await Assert.ThrowsAsync<TimeoutException>(() => downloader.TryDownloadAsync(
+            fixture.Uri, fixture.Path, 4, new RetryPolicy(1), null, CancellationToken.None));
+        Assert.False(File.Exists(fixture.Path));
+    }
+
+    private sealed class StalledStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); return 0; }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private sealed class Fixture : IDisposable
     {
         public byte[] Bytes { get; } = Enumerable.Range(0, 9 * 1024 * 1024 + 7).Select(i => (byte)(i % 251)).ToArray();
@@ -100,6 +138,7 @@ public sealed class ParallelHttpFileDownloaderTests
         public string ETag = "\"version-1\"";
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (mode == "stall-headers") await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             var range = Assert.Single(request.Headers.Range!.Ranges);
             var from = range.From!.Value;
             var to = range.To!.Value;
@@ -116,7 +155,7 @@ public sealed class ParallelHttpFileDownloaderTests
             if (!probe && mode == "ignore") return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
             var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
             {
-                Content = new ByteArrayContent(bytes, (int)from, (int)(to - from + 1))
+                Content = !probe && mode == "stall-body" ? new StreamContent(new StalledStream()) : new ByteArrayContent(bytes, (int)from, (int)(to - from + 1))
             };
             response.Content.Headers.ContentRange = new ContentRangeHeaderValue(!probe && mode == "wrong-range" ? from + 1 : from, to, bytes.Length);
             if (mode != "missing-tag") response.Headers.ETag = new EntityTagHeaderValue(!probe && mode == "changed-tag" ? "\"different\"" : ETag);
