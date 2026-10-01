@@ -26,6 +26,8 @@
                     </RadioButtons>
                     <NumberBox x:Name="DownloadConnectionsBox" x:Uid="Settings_DownloadConnections" Minimum="1" Maximum="256" SmallChange="1" LargeChange="16" SpinButtonPlacementMode="Inline" ValueChanged="DownloadConnections_Changed" />
                     <TextBlock x:Uid="Settings_DownloadConnectionsHint" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                    <NumberBox x:Name="DownloadSpeedBox" x:Uid="Settings_DownloadSpeed" Minimum="0" Maximum="1048576" SmallChange="128" LargeChange="1024" SpinButtonPlacementMode="Inline" ValueChanged="DownloadSpeed_Changed" />
+                    <TextBlock x:Uid="Settings_DownloadSpeedHint" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
                     <ComboBox x:Name="QualityBox" x:Uid="Settings_DefaultQuality" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch">
                         <ComboBoxItem x:Uid="Option_Highest" Tag="Highest" />
                         <ComboBoxItem x:Uid="Option_Player" Tag="Player" />

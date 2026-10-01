@@ -32,4 +32,6 @@
   <data name="DirectFile_CreateFailed" xml:space="preserve"><value>Could not create the download. Check the output folder and permissions, then retry.</value></data>
 <data name="Settings_DownloadConnections.Header" xml:space="preserve"><value>Total download connections (1–256)</value></data>
 <data name="Settings_DownloadConnectionsHint.Text" xml:space="preserve"><value>Shared by all downloads; default 64. Large files use ranges when supported. Small files and unsupported servers use one connection. Excessive connections can cause stutter or server throttling.</value></data>
+  <data name="Settings_DownloadSpeed.Header" xml:space="preserve"><value>Total download speed limit (KiB/s)</value></data>
+  <data name="Settings_DownloadSpeedHint.Text" xml:space="preserve"><value>0 means unlimited. This limit is shared by all tasks and connections; 1024 KiB/s equals 1 MiB/s.</value></data>
 </root>

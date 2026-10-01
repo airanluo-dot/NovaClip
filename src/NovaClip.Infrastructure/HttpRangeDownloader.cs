@@ -23,6 +23,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
     private readonly RetryExecutor _retryExecutor;
     private readonly HttpTransferDeadline _deadline;
     public DownloadConnectionBudget Connections { get; } = new();
+    public DownloadBandwidthLimiter Bandwidth { get; } = new();
 
     public HttpRangeDownloader(HttpClient? httpClient = null, RetryExecutor? retryExecutor = null, TimeSpan? idleTimeout = null)
     {
@@ -240,7 +241,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             {
                 if (track.Type == TrackType.File && requestHeaders is null)
                 {
-                    var parallel = new ParallelHttpFileDownloader(_httpClient, _deadline.Timeout, Connections);
+                    var parallel = new ParallelHttpFileDownloader(_httpClient, _deadline.Timeout, Connections, Bandwidth);
                     var result = await parallel.TryDownloadAsync(candidateUri, destinationPath, Connections.Limit, retryPolicy, progress, cancellationToken).ConfigureAwait(false);
                     if (result is long size) return size;
                 }
@@ -340,6 +341,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         int read;
         while ((read = await _deadline.RunAsync(token => input.ReadAsync(buffer.AsMemory(), token).AsTask(), cancellationToken).ConfigureAwait(false)) > 0)
         {
+            await Bandwidth.ConsumeAsync(read, cancellationToken).ConfigureAwait(false);
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             downloaded += read;
             if (track.Size is > 0 && downloaded > track.Size.Value) throw new InvalidDataException("The server returned more bytes than the media track declares.");

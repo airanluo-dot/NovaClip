@@ -6,10 +6,11 @@ using NovaClip.Core;
 namespace NovaClip.Infrastructure;
 
 /// <summary>Independent HTTP range transport for a private, per-task staging path.</summary>
-public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idleTimeout = null, DownloadConnectionBudget? connectionBudget = null)
+public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idleTimeout = null, DownloadConnectionBudget? connectionBudget = null, DownloadBandwidthLimiter? bandwidthLimiter = null)
 {
     private const int BufferSize = 128 * 1024;
     private readonly RetryExecutor _retry = new();
+    private readonly DownloadBandwidthLimiter _bandwidth = bandwidthLimiter ?? new();
     private readonly DownloadConnectionBudget _connections = connectionBudget ?? new();
     private readonly HttpTransferDeadline _deadline = new(idleTimeout);
     private sealed record Identity(string Url, string ETag, long Length, int Parts);
@@ -113,6 +114,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
                     while ((count = await _deadline.RunAsync(readToken => input.ReadAsync(buffer.AsMemory(), readToken).AsTask(), token).ConfigureAwait(false)) > 0)
                     {
                         if (count > part.Length - existing) throw new RangeRejectedException();
+                        await _bandwidth.ConsumeAsync(count, token).ConfigureAwait(false);
                         await output.WriteAsync(buffer.AsMemory(0, count), token).ConfigureAwait(false);
                         existing += count;
                         lock (gate)

@@ -23,11 +23,12 @@ public sealed record WindowsSettingsSnapshot(
     string UpdateFeedRepository,
     string Theme,
     string? LastBrowserUrl = null,
-    int MaxDownloadConnections = 64);
+    int MaxDownloadConnections = 64,
+    int DownloadSpeedLimitKiB = 0);
 
 public sealed class WindowsSettingsStore
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
     private const int MaxSettingsBytes = 1_000_000;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly object _saveGate = new();
@@ -39,6 +40,7 @@ public sealed class WindowsSettingsStore
     public string DownloadDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
     public int MaxConcurrentTasks { get; set; } = 2;
     public int MaxDownloadConnections { get; set; } = 64;
+    public int DownloadSpeedLimitKiB { get; set; }
     public int MaxRetryAttempts { get; set; } = 3;
     public string DefaultQuality { get; set; } = "Highest";
     public string DefaultCodec { get; set; } = "Auto";
@@ -71,6 +73,7 @@ public sealed class WindowsSettingsStore
             if (!string.IsNullOrWhiteSpace(document.DownloadDirectory) && Path.IsPathRooted(document.DownloadDirectory)) DownloadDirectory = document.DownloadDirectory;
             MaxConcurrentTasks = Math.Clamp(document.MaxConcurrentTasks, 1, 3);
             MaxDownloadConnections = Math.Clamp(document.MaxDownloadConnections, 1, 256);
+            DownloadSpeedLimitKiB = Math.Clamp(document.DownloadSpeedLimitKiB, 0, 1_048_576);
             MaxRetryAttempts = Math.Clamp(document.MaxRetryAttempts, 1, 8);
             DefaultQuality = document.DefaultQuality ?? DefaultQuality;
             DefaultCodec = document.DefaultCodec ?? DefaultCodec;
@@ -115,7 +118,8 @@ public sealed class WindowsSettingsStore
             UpdateFeedRepository,
             Theme,
             LastBrowserUrl,
-            MaxDownloadConnections);
+            MaxDownloadConnections,
+            DownloadSpeedLimitKiB);
 
     public void Restore(WindowsSettingsSnapshot snapshot)
     {
@@ -123,6 +127,7 @@ public sealed class WindowsSettingsStore
         DownloadDirectory = snapshot.DownloadDirectory;
         MaxConcurrentTasks = snapshot.MaxConcurrentTasks;
         MaxDownloadConnections = snapshot.MaxDownloadConnections;
+        DownloadSpeedLimitKiB = snapshot.DownloadSpeedLimitKiB;
         MaxRetryAttempts = snapshot.MaxRetryAttempts;
         DefaultQuality = snapshot.DefaultQuality;
         DefaultCodec = snapshot.DefaultCodec;
@@ -143,7 +148,7 @@ public sealed class WindowsSettingsStore
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(DownloadDirectory) || !Path.IsPathRooted(DownloadDirectory)) throw new InvalidDataException("The download directory must be absolute.");
-        if (MaxConcurrentTasks is < 1 or > 3 || MaxDownloadConnections is < 1 or > 256 || MaxRetryAttempts is < 1 or > 8) throw new InvalidDataException("The download limits are outside the supported range.");
+        if (MaxConcurrentTasks is < 1 or > 3 || MaxDownloadConnections is < 1 or > 256 || MaxRetryAttempts is < 1 or > 8 || DownloadSpeedLimitKiB is < 0 or > 1_048_576) throw new InvalidDataException("The download limits are outside the supported range.");
         if (DefaultQuality is not ("Highest" or "Player" or "1080P" or "720P")) throw new InvalidDataException("The default quality is invalid.");
         if (DefaultCodec is not ("Auto" or "AVC" or "HEVC" or "AV1")) throw new InvalidDataException("The default codec is invalid.");
         if (RetryPreset is not ("Standard" or "Aggressive" or "Off")) throw new InvalidDataException("The retry preset is invalid.");
@@ -184,7 +189,8 @@ public sealed class WindowsSettingsStore
                     DebugLogging,
                     Theme,
                     LastBrowserUrl,
-            MaxDownloadConnections);
+            MaxDownloadConnections,
+            DownloadSpeedLimitKiB);
                 var json = JsonSerializer.Serialize(document, JsonOptions);
                 var tempPath = _settingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
@@ -258,5 +264,6 @@ public sealed class WindowsSettingsStore
         bool DebugLogging = false,
         string? Theme = null,
         string? LastBrowserUrl = null,
-        int MaxDownloadConnections = 64);
+        int MaxDownloadConnections = 64,
+    int DownloadSpeedLimitKiB = 0);
 }

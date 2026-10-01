@@ -69,6 +69,7 @@ public static class AppServices
 
             Downloader = new HttpRangeDownloader(MediaHttpClient);
             Downloader.Connections.SetLimit(Settings.MaxDownloadConnections);
+            Downloader.Bandwidth.SetLimit(Settings.DownloadSpeedLimitKiB * 1024L);
             Ffmpeg = new WindowsFfmpegService(Settings);
             Repository = new SqliteDownloadTaskRepository(ResolveDatabasePath());
             Reservations = new OutputReservationService();
@@ -82,7 +83,7 @@ public static class AppServices
                 Repository);
             UpdateService = new GitHubReleaseUpdateService(UpdateHttpClient, Settings.UpdateFeedRepository, WindowsSettingsStore.GitHubToken);
             UpdateCoordinator = new WindowsUpdateCoordinator(UpdateService, Settings);
-            SettingsCoordinator = new SettingsApplicationCoordinator(Settings, Downloads, Downloader.Connections);
+            SettingsCoordinator = new SettingsApplicationCoordinator(Settings, Downloads, Downloader.Connections, Downloader.Bandwidth);
 
             StartupDiagnostics.Info("Initializing SQLite repository.");
             await Repository.InitializeAsync(cancellationToken).ConfigureAwait(true);
