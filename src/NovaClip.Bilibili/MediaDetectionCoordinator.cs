@@ -128,9 +128,11 @@ public sealed class MediaDetectionCoordinator : IMediaDetectionCoordinator
         lock (_gate)
         {
             accepted = _page is not null && observation.NavigationGeneration == _generation;
-            snapshot = accepted
-                ? TransitionLocked(MediaDetectionState.CandidateFound, "MediaDetection.PlayUrlObserved")
-                : AddDiagnosticLocked("MediaDetection.StaleObservationIgnored", MediaDetectionState.Observing);
+            snapshot = !accepted
+                ? AddDiagnosticLocked("MediaDetection.StaleObservationIgnored", MediaDetectionState.Observing)
+                : _snapshot.State == MediaDetectionState.Ready
+                    ? AddDiagnosticLocked("MediaDetection.PlayUrlObserved", MediaDetectionState.CandidateFound)
+                    : TransitionLocked(MediaDetectionState.CandidateFound, "MediaDetection.PlayUrlObserved");
         }
 
         Publish(snapshot);
@@ -147,7 +149,11 @@ public sealed class MediaDetectionCoordinator : IMediaDetectionCoordinator
             if (_page is null) return;
             page = _page;
             expectedGeneration = _generation;
-            snapshot = TransitionLocked(MediaDetectionState.Resolving, "MediaDetection.ResolveStarted");
+            // Keep a valid result visible while refreshing the same page. A duplicate
+            // observation or transient strategy failure must not erase playable media.
+            snapshot = _snapshot.State == MediaDetectionState.Ready
+                ? AddDiagnosticLocked("MediaDetection.ResolveStarted", MediaDetectionState.Resolving)
+                : TransitionLocked(MediaDetectionState.Resolving, "MediaDetection.ResolveStarted");
         }
 
         Publish(snapshot);
@@ -201,7 +207,7 @@ public sealed class MediaDetectionCoordinator : IMediaDetectionCoordinator
 
         lock (_gate)
         {
-            if (expectedGeneration != _generation) return;
+            if (expectedGeneration != _generation || _snapshot.State == MediaDetectionState.Ready) return;
             snapshot = hadStrategyError
                 ? TransitionLocked(MediaDetectionState.Error, "MediaDetection.StrategiesFailed", errorCode: "MEDIA_STRATEGY_FAILED")
                 : TransitionLocked(MediaDetectionState.Unsupported, "MediaDetection.NotFound", errorCode: "MEDIA_NOT_FOUND");
