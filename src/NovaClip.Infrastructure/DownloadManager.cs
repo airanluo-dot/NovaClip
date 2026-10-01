@@ -225,8 +225,11 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             {
                 reservation = await _reservations.ReserveAsync(snapshot.Id, directory, fileName, cancellationToken).ConfigureAwait(false);
             }
-            catch (IOException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
+                // An unavailable previous output must not prevent the application or other tasks
+                // from opening. Keep its persisted snapshot intact for recovery on a later launch.
+                StartupDiagnosticsAdapter.Warning("A persisted download output could not be reserved.", exception);
                 continue;
             }
 
@@ -697,18 +700,18 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
     private static async Task<DownloadRequest?> TryRestoreRequestAsync(DownloadTaskSnapshot snapshot, CancellationToken cancellationToken)
     {
-        var outputDirectory = Path.GetDirectoryName(snapshot.OutputPath);
-        if (string.IsNullOrWhiteSpace(outputDirectory) || !Path.IsPathRooted(snapshot.OutputPath)) return null;
-        var taskRoot = HttpRangeDownloader.GetTaskRoot(outputDirectory, snapshot.Id);
-        var manifestPath = Path.Combine(taskRoot, "task.json");
-        if (!File.Exists(manifestPath))
-        {
-            var legacyRoot = Path.Combine(outputDirectory, ".bilinative", snapshot.Id.ToString("N"));
-            manifestPath = Path.Combine(legacyRoot, "task.json");
-        }
-
         try
         {
+            var outputDirectory = Path.GetDirectoryName(snapshot.OutputPath);
+            if (string.IsNullOrWhiteSpace(outputDirectory) || !Path.IsPathRooted(snapshot.OutputPath)) return null;
+            var taskRoot = HttpRangeDownloader.GetTaskRoot(outputDirectory, snapshot.Id);
+            var manifestPath = Path.Combine(taskRoot, "task.json");
+            if (!File.Exists(manifestPath))
+            {
+                var legacyRoot = Path.Combine(outputDirectory, ".bilinative", snapshot.Id.ToString("N"));
+                manifestPath = Path.Combine(legacyRoot, "task.json");
+            }
+    
             if (!File.Exists(manifestPath) || new FileInfo(manifestPath).Length > MaxManifestCharacters * sizeof(char)) return null;
             var json = await File.ReadAllTextAsync(manifestPath, cancellationToken).ConfigureAwait(false);
             if (json.Length > MaxManifestCharacters) return null;
@@ -780,7 +783,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             ValidateRequest(request);
             return request;
         }
-        catch (Exception exception) when (exception is JsonException or IOException or ArgumentException or NullReferenceException)
+        catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or NullReferenceException)
         {
             StartupDiagnosticsAdapter.Warning("A persisted download task could not be restored.", exception);
             return null;
