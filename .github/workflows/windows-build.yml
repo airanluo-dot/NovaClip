@@ -120,6 +120,7 @@ jobs:
           path: |
             artifacts/windows/*.zip
             artifacts/windows/*-setup.exe
+            publish/**/ui-smoke/*.png
           if-no-files-found: error
 
   release:

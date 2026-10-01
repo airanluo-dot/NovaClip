@@ -55,8 +55,41 @@ public sealed partial class MainWindow : Window
             await Task.Delay(100);
             if (!ReferenceEquals(Pages.BrowserPage.Instance, browser))
                 throw new InvalidOperationException("BROWSER_CACHE_OWNERSHIP_LOST");
+            if (tag != "browser") await CaptureSmokePageAsync(tag);
         }
         StartupDiagnostics.Info("Browser.CacheOwnershipVerified");
+    }
+
+    private async Task CaptureSmokePageAsync(string tag)
+    {
+        // CI-only, freshly initialized test profile; never capture a user's session.
+        try
+        {
+            var bitmap = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
+            await bitmap.RenderAsync(ContentFrame);
+            if (bitmap.PixelWidth == 0 || bitmap.PixelHeight == 0)
+                throw new InvalidOperationException("UI_CAPTURE_EMPTY");
+            var pixels = await bitmap.GetPixelsAsync();
+            var bytes = new byte[pixels.Length];
+            using (var reader = global::Windows.Storage.Streams.DataReader.FromBuffer(pixels))
+                reader.ReadBytes(bytes);
+            var directory = Path.Combine(AppContext.BaseDirectory, "ui-smoke");
+            Directory.CreateDirectory(directory);
+            var folder = await global::Windows.Storage.StorageFolder.GetFolderFromPathAsync(directory);
+            var file = await folder.CreateFileAsync(tag + ".png", global::Windows.Storage.CreationCollisionOption.ReplaceExisting);
+            using var stream = await file.OpenAsync(global::Windows.Storage.FileAccessMode.ReadWrite);
+            var encoder = await global::Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(
+                global::Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId, stream);
+            encoder.SetPixelData(global::Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8,
+                global::Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied,
+                (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, 96, 96, bytes);
+            await encoder.FlushAsync();
+            StartupDiagnostics.Info("UI.Captured:" + tag);
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Warning("UI capture unavailable: " + tag, exception);
+        }
     }
 
     public void ApplyTheme(string theme)
