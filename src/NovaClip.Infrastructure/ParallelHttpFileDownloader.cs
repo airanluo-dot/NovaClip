@@ -11,19 +11,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
     private const int BufferSize = 128 * 1024;
     private readonly RetryExecutor _retry = new();
     private readonly DownloadConnectionBudget _connections = connectionBudget ?? new();
-    private readonly TimeSpan _idleTimeout = ValidateTimeout(idleTimeout ?? TimeSpan.FromSeconds(30));
-
-    private static TimeSpan ValidateTimeout(TimeSpan timeout) => timeout > TimeSpan.Zero && timeout <= TimeSpan.FromMinutes(10)
-        ? timeout : throw new ArgumentOutOfRangeException(nameof(timeout));
-
-    private async Task<T> WithIdleDeadlineAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken token)
-    {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(_idleTimeout);
-        try { return await operation(deadline.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException exception) when (!token.IsCancellationRequested && deadline.IsCancellationRequested)
-        { throw new TimeoutException("The download server stopped responding.", exception); }
-    }
+    private readonly HttpTransferDeadline _deadline = new(idleTimeout);
     private sealed record Identity(string Url, string ETag, long Length, int Parts);
     private sealed class RangeRejectedException : Exception { }
 
@@ -37,7 +25,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
         if (connections <= 1) return null;
         using var probeLease = await _connections.AcquireAsync(cancellationToken).ConfigureAwait(false);
         using var probe = NewRequest(uri, 0, 0);
-        using var head = await WithIdleDeadlineAsync(token => client.SendAsync(probe, HttpCompletionOption.ResponseHeadersRead, token), cancellationToken).ConfigureAwait(false);
+        using var head = await _deadline.RunAsync(token => client.SendAsync(probe, HttpCompletionOption.ResponseHeadersRead, token), cancellationToken).ConfigureAwait(false);
         var range = head.Content.Headers.ContentRange;
         var tag = head.Headers.ETag;
         if (head.StatusCode != HttpStatusCode.PartialContent || range?.Unit != "bytes" ||
@@ -108,7 +96,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
                     using var lease = await _connections.AcquireAsync(token).ConfigureAwait(false);
                     using var request = NewRequest(uri, part.From + existing, part.To);
                     request.Headers.IfRange = new RangeConditionHeaderValue(tag);
-                    using var response = await WithIdleDeadlineAsync(readToken => client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, readToken), token).ConfigureAwait(false);
+                    using var response = await _deadline.RunAsync(readToken => client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, readToken), token).ConfigureAwait(false);
                     if (response.StatusCode is HttpStatusCode.OK or HttpStatusCode.RequestedRangeNotSatisfiable)
                         throw new RangeRejectedException();
                     response.EnsureSuccessStatusCode();
@@ -122,7 +110,7 @@ public sealed class ParallelHttpFileDownloader(HttpClient client, TimeSpan? idle
                     await using var output = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.Read, BufferSize, FileOptions.Asynchronous);
                     var buffer = new byte[BufferSize];
                     int count;
-                    while ((count = await WithIdleDeadlineAsync(readToken => input.ReadAsync(buffer.AsMemory(), readToken).AsTask(), token).ConfigureAwait(false)) > 0)
+                    while ((count = await _deadline.RunAsync(readToken => input.ReadAsync(buffer.AsMemory(), readToken).AsTask(), token).ConfigureAwait(false)) > 0)
                     {
                         if (count > part.Length - existing) throw new RangeRejectedException();
                         await output.WriteAsync(buffer.AsMemory(0, count), token).ConfigureAwait(false);

@@ -21,12 +21,14 @@ public sealed class HttpRangeDownloader : IDownloadEngine
 
     private readonly HttpClient _httpClient;
     private readonly RetryExecutor _retryExecutor;
+    private readonly HttpTransferDeadline _deadline;
     public DownloadConnectionBudget Connections { get; } = new();
 
-    public HttpRangeDownloader(HttpClient? httpClient = null, RetryExecutor? retryExecutor = null)
+    public HttpRangeDownloader(HttpClient? httpClient = null, RetryExecutor? retryExecutor = null, TimeSpan? idleTimeout = null)
     {
         _httpClient = httpClient ?? new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None });
         _retryExecutor = retryExecutor ?? new RetryExecutor();
+        _deadline = new HttpTransferDeadline(idleTimeout);
     }
 
     public static string GetTaskRoot(string outputDirectory, Guid taskId) =>
@@ -144,7 +146,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
                 var segmentPath = Path.Combine(taskRoot, $"segment-{segment.Index:D4}.part");
                 await using var input = new FileStream(segmentPath, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
                 int read;
-                while ((read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
+                while ((read = await _deadline.RunAsync(token => input.ReadAsync(buffer.AsMemory(), token).AsTask(), cancellationToken).ConfigureAwait(false)) > 0)
                 {
                     await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 }
@@ -238,7 +240,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             {
                 if (track.Type == TrackType.File && requestHeaders is null)
                 {
-                    var parallel = new ParallelHttpFileDownloader(_httpClient, connectionBudget: Connections);
+                    var parallel = new ParallelHttpFileDownloader(_httpClient, _deadline.Timeout, Connections);
                     var result = await parallel.TryDownloadAsync(candidateUri, destinationPath, Connections.Limit, retryPolicy, progress, cancellationToken).ConfigureAwait(false);
                     if (result is long size) return size;
                 }
@@ -286,7 +288,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         }
 
         using var lease = await Connections.AcquireAsync(cancellationToken).ConfigureAwait(false);
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using var response = await _deadline.RunAsync(token => _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token), cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.PartialContent)
         {
             throw new HttpRequestException($"HTTP {(int)response.StatusCode} while downloading media.", null, response.StatusCode);
@@ -336,7 +338,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         var downloaded = startingLength;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int read;
-        while ((read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
+        while ((read = await _deadline.RunAsync(token => input.ReadAsync(buffer.AsMemory(), token).AsTask(), cancellationToken).ConfigureAwait(false)) > 0)
         {
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             downloaded += read;
@@ -470,14 +472,14 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         HttpRequestException http when http.StatusCode is HttpStatusCode.RequestTimeout or (HttpStatusCode)429 => true,
         HttpRequestException http when http.StatusCode is null => true,
         HttpRequestException http when (int?)http.StatusCode >= 500 => true,
-        IOException => true,
+        IOException or TimeoutException => true,
         _ => false
     };
 
     private static bool IsFallbackEligible(Exception exception) => exception switch
     {
         HttpRequestException http => http.StatusCode is null || (int?)http.StatusCode >= 500 || http.StatusCode is HttpStatusCode.RequestTimeout or (HttpStatusCode)429 or HttpStatusCode.Forbidden or HttpStatusCode.PreconditionFailed,
-        IOException => true,
+        IOException or TimeoutException => true,
         _ => false
     };
 
