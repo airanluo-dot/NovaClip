@@ -42,14 +42,64 @@ public sealed class DownloadPersistenceQueueTests
         Assert.Equal(500_000, repository.Writes.Last().DownloadedBytes);
     }
 
+    [Fact]
+    public async Task DelayedProgressCannotOverwriteCompletedCheckpoint()
+    {
+        var repository = new RecordingRepository();
+        await using var worker = new DownloadPersistenceWorker(repository);
+        var now = DateTimeOffset.UtcNow;
+        var completed = new DownloadTaskSnapshot
+        {
+            Id = Guid.NewGuid(), PageUrl = "https://www.bilibili.com/video/BV1TEST",
+            Title = "completed", OutputPath = "completed.mp4", RunId = 2,
+            State = DownloadTaskState.Completed, OperationState = DurableOperationState.Committed,
+            CreatedAt = now, UpdatedAt = now, DownloadedBytes = 2_000_000
+        };
+        await worker.EnqueueCriticalAsync(completed);
+        worker.EnqueueProgress(completed with
+        {
+            State = DownloadTaskState.DownloadingVideo,
+            OperationState = DurableOperationState.Downloading,
+            UpdatedAt = now.AddSeconds(-1), DownloadedBytes = 1_000_000
+        });
+        await worker.DrainAsync(TimeSpan.FromSeconds(5));
+        Assert.Single(repository.Writes);
+        Assert.Equal(DownloadTaskState.Completed, repository.Writes.Last().State);
+    }
+
+    [Fact]
+    public async Task FailedProgressWritesBackOffAndCanRecover()
+    {
+        var repository = new RecordingRepository { FailWrites = true };
+        await using var worker = new DownloadPersistenceWorker(repository);
+        worker.EnqueueProgress(new DownloadTaskSnapshot
+        {
+            Id = Guid.NewGuid(), PageUrl = "https://www.bilibili.com/video/BV1TEST",
+            Title = "retry", OutputPath = "retry.mp4", State = DownloadTaskState.DownloadingVideo,
+            CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await repository.FirstAttempt.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(100);
+        Assert.InRange(Volatile.Read(ref repository.Attempts), 1, 3);
+        repository.FailWrites = false;
+        await worker.DrainAsync(TimeSpan.FromSeconds(5));
+        Assert.Single(repository.Writes);
+    }
+
     private sealed class RecordingRepository : IDownloadTaskRepository
     {
         public ConcurrentQueue<DownloadTaskSnapshot> Writes { get; } = new();
+        public volatile bool FailWrites;
+        public int Attempts;
+        public TaskCompletionSource FirstAttempt { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task InitializeAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task UpsertAsync(DownloadTaskSnapshot snapshot, CancellationToken cancellationToken = default)
         {
+            Interlocked.Increment(ref Attempts);
+            FirstAttempt.TrySetResult();
+            if (FailWrites) throw new IOException("Simulated database lock");
             Writes.Enqueue(snapshot);
             return Task.CompletedTask;
         }
