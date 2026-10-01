@@ -21,11 +21,15 @@ public sealed class HttpRangeDownloader : IDownloadEngine
 
     private readonly HttpClient _httpClient;
     private readonly RetryExecutor _retryExecutor;
+    private readonly HttpTransferDeadline _deadline;
+    public DownloadConnectionBudget Connections { get; } = new();
+    public DownloadBandwidthLimiter Bandwidth { get; } = new();
 
-    public HttpRangeDownloader(HttpClient? httpClient = null, RetryExecutor? retryExecutor = null)
+    public HttpRangeDownloader(HttpClient? httpClient = null, RetryExecutor? retryExecutor = null, TimeSpan? idleTimeout = null)
     {
         _httpClient = httpClient ?? new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None });
         _retryExecutor = retryExecutor ?? new RetryExecutor();
+        _deadline = new HttpTransferDeadline(idleTimeout);
     }
 
     public static string GetTaskRoot(string outputDirectory, Guid taskId) =>
@@ -44,6 +48,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         var tracks = new List<(MediaTrack Track, string Path)>();
         if (request.VideoTrack is not null) tracks.Add((request.VideoTrack, Path.Combine(taskRoot, "video.m4s.part")));
         if (request.AudioTrack is not null) tracks.Add((request.AudioTrack, Path.Combine(taskRoot, "audio.m4s.part")));
+        if (request.FileTrack is not null) tracks.Add((request.FileTrack, Path.Combine(taskRoot, "file.part")));
         await WriteTaskManifestAsync(request, taskRoot, cancellationToken).ConfigureAwait(false);
 
         if (tracks.Count == 0 && request.Media.LegacySegments.Count > 0)
@@ -71,14 +76,15 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         var downloadedByTrack = new Dictionary<string, long>(StringComparer.Ordinal);
         var trackTasks = tracks.Select(async item =>
         {
-            var type = item.Track.Type == TrackType.Video ? DownloadTaskState.DownloadingVideo : DownloadTaskState.DownloadingAudio;
-            var trackProgress = new Progress<TrackProgress>(value =>
+            var type = item.Track.Type == TrackType.File ? DownloadTaskState.DownloadingFile :
+                item.Track.Type == TrackType.Video ? DownloadTaskState.DownloadingVideo : DownloadTaskState.DownloadingAudio;
+            var trackProgress = new InlineProgress<TrackProgress>(value =>
             {
                 lock (gate)
                 {
                     downloadedByTrack[item.Track.TrackId] = value.DownloadedBytes;
                     var current = downloadedByTrack.Values.Sum();
-                    progress.Report(new DownloadProgress(request.TaskId, type, current, totals > 0 ? totals : null, value));
+                    progress.Report(new DownloadProgress(request.TaskId, type, current, request.FileTrack is not null ? value.TotalBytes : totals > 0 ? totals : null, value));
                 }
             });
             var bytes = await DownloadTrackAsync(item.Track, item.Path, request.RetryPolicy, trackProgress, request.RequestHeaders, cancellationToken).ConfigureAwait(false);
@@ -121,7 +127,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             };
             var segmentPath = Path.Combine(taskRoot, $"segment-{segment.Index:D4}.part");
             var completedBefore = completed;
-            var segmentProgress = new Progress<TrackProgress>(value =>
+            var segmentProgress = new InlineProgress<TrackProgress>(value =>
                 progress.Report(new DownloadProgress(
                     request.TaskId,
                     DownloadTaskState.DownloadingSegments,
@@ -141,7 +147,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
                 var segmentPath = Path.Combine(taskRoot, $"segment-{segment.Index:D4}.part");
                 await using var input = new FileStream(segmentPath, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
                 int read;
-                while ((read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
+                while ((read = await _deadline.RunAsync(token => input.ReadAsync(buffer.AsMemory(), token).AsTask(), cancellationToken).ConfigureAwait(false)) > 0)
                 {
                     await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 }
@@ -171,8 +177,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
                 userAgent = request.RequestHeaders.UserAgent,
                 refreshUrl = request.RequestHeaders.RefreshUrl
             },
-            tracks = request.VideoTrack is not null || request.AudioTrack is not null
-                ? new[] { request.VideoTrack, request.AudioTrack }.Where(track => track is not null).Select(track => new
+            tracks = request.FileTrack is not null || request.VideoTrack is not null || request.AudioTrack is not null
+                ? new[] { request.VideoTrack, request.AudioTrack, request.FileTrack }.Where(track => track is not null).Select(track => new
                 {
                     type = track!.Type.ToString(),
                     trackId = track.TrackId,
@@ -209,7 +215,7 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         if (string.IsNullOrWhiteSpace(destinationPath) || !Path.IsPathRooted(destinationPath)) throw new ArgumentException("The destination path must be absolute.", nameof(destinationPath));
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? throw new ArgumentException("The destination path must include a directory.", nameof(destinationPath)));
 
-        if (track.Size is long expectedSize && File.Exists(destinationPath))
+        if (track.Type != TrackType.File && track.Size is long expectedSize && File.Exists(destinationPath))
         {
             var existingLength = new FileInfo(destinationPath).Length;
             if (existingLength == expectedSize)
@@ -233,6 +239,12 @@ public sealed class HttpRangeDownloader : IDownloadEngine
 
             try
             {
+                if (track.Type == TrackType.File && requestHeaders is null)
+                {
+                    var parallel = new ParallelHttpFileDownloader(_httpClient, _deadline.Timeout, Connections, Bandwidth);
+                    var result = await parallel.TryDownloadAsync(candidateUri, destinationPath, Connections.Limit, retryPolicy, progress, cancellationToken).ConfigureAwait(false);
+                    if (result is long size) return size;
+                }
                 return await _retryExecutor.ExecuteAsync(
                     token => DownloadCandidateAsync(track, candidateUri, candidateIndex, destinationPath, progress, requestHeaders, token),
                     retryPolicy,
@@ -276,7 +288,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             ApplyIfRange(request, metadata);
         }
 
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using var lease = await Connections.AcquireAsync(cancellationToken).ConfigureAwait(false);
+        using var response = await _deadline.RunAsync(token => _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token), cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.PartialContent)
         {
             throw new HttpRequestException($"HTTP {(int)response.StatusCode} while downloading media.", null, response.StatusCode);
@@ -326,8 +339,9 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         var downloaded = startingLength;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int read;
-        while ((read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
+        while ((read = await _deadline.RunAsync(token => input.ReadAsync(buffer.AsMemory(), token).AsTask(), cancellationToken).ConfigureAwait(false)) > 0)
         {
+            await Bandwidth.ConsumeAsync(read, cancellationToken).ConfigureAwait(false);
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             downloaded += read;
             if (track.Size is > 0 && downloaded > track.Size.Value) throw new InvalidDataException("The server returned more bytes than the media track declares.");
@@ -460,14 +474,14 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         HttpRequestException http when http.StatusCode is HttpStatusCode.RequestTimeout or (HttpStatusCode)429 => true,
         HttpRequestException http when http.StatusCode is null => true,
         HttpRequestException http when (int?)http.StatusCode >= 500 => true,
-        IOException => true,
+        IOException or TimeoutException => true,
         _ => false
     };
 
     private static bool IsFallbackEligible(Exception exception) => exception switch
     {
         HttpRequestException http => http.StatusCode is null || (int?)http.StatusCode >= 500 || http.StatusCode is HttpStatusCode.RequestTimeout or (HttpStatusCode)429 or HttpStatusCode.Forbidden or HttpStatusCode.PreconditionFailed,
-        IOException => true,
+        IOException or TimeoutException => true,
         _ => false
     };
 
@@ -509,7 +523,10 @@ public sealed class HttpRangeDownloader : IDownloadEngine
         ArgumentNullException.ThrowIfNull(request.Media.LegacySegments);
         if (string.IsNullOrWhiteSpace(request.OutputDirectory) || !Path.IsPathRooted(request.OutputDirectory)) throw new ArgumentException("The output directory must be an absolute path.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.OutputFileName) || request.OutputFileName is "." or ".." || request.OutputFileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(request.OutputFileName) != request.OutputFileName) throw new ArgumentException("The output file name must be a single safe file name.", nameof(request));
-        if (request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count == 0) throw new ArgumentException("The download request has no media tracks.", nameof(request));
+        if (request.FileTrack is null && request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count == 0) throw new ArgumentException("The download request has no media tracks.", nameof(request));
+        ValidateTrack(request.FileTrack, TrackType.File);
+        if (request.FileTrack is not null && (request.VideoTrack is not null || request.AudioTrack is not null || request.Media.LegacySegments.Count != 0 || request.Media.Tracks.Count != 1))
+            throw new ArgumentException("A file download cannot mix media tracks.", nameof(request));
         ValidateTrack(request.VideoTrack, TrackType.Video);
         ValidateTrack(request.AudioTrack, TrackType.Audio);
         if (request.VideoTrack is not null && request.AudioTrack is not null && string.Equals(request.VideoTrack.TrackId, request.AudioTrack.TrackId, StringComparison.Ordinal)) throw new ArgumentException("The media track IDs must be unique.", nameof(request));

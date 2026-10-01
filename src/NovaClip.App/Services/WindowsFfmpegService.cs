@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using NovaClip.Core;
+using NovaClip.Infrastructure;
 
 namespace NovaClip.App;
 
@@ -50,20 +51,8 @@ public sealed class WindowsFfmpegService : IFfmpegService
             RedirectStandardError = true,
             RedirectStandardOutput = true
         };
-        startInfo.ArgumentList.Add("-hide_banner");
-        startInfo.ArgumentList.Add("-nostdin");
-        startInfo.ArgumentList.Add("-y");
-        startInfo.ArgumentList.Add("-i");
-        startInfo.ArgumentList.Add(videoPath);
-        startInfo.ArgumentList.Add("-i");
-        startInfo.ArgumentList.Add(audioPath);
-        startInfo.ArgumentList.Add("-map");
-        startInfo.ArgumentList.Add("0:v:0");
-        startInfo.ArgumentList.Add("-map");
-        startInfo.ArgumentList.Add("1:a:0");
-        startInfo.ArgumentList.Add("-c");
-        startInfo.ArgumentList.Add("copy");
-        startInfo.ArgumentList.Add(outputPath);
+        foreach (var argument in FfmpegCommandArguments.ForMp4Mux(videoPath, audioPath, outputPath))
+            startInfo.ArgumentList.Add(argument);
 
         using var process = new Process { StartInfo = startInfo };
         Task<string>? stdoutTask = null;

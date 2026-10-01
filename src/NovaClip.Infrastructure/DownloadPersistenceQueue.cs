@@ -12,6 +12,7 @@ public sealed class DownloadPersistenceWorker : IAsyncDisposable
     private readonly ConcurrentQueue<CriticalWrite> _critical = new();
     private readonly ConcurrentDictionary<Guid, DownloadTaskSnapshot> _progress = new();
     private readonly Dictionary<Guid, ProgressCheckpoint> _checkpoints = [];
+    private readonly Dictionary<Guid, DateTimeOffset> _retryNotBefore = [];
     private readonly SemaphoreSlim _signal = new(0);
     private readonly CancellationTokenSource _stopSource = new();
     private readonly Task _worker;
@@ -97,16 +98,24 @@ public sealed class DownloadPersistenceWorker : IAsyncDisposable
         var now = DateTimeOffset.UtcNow;
         foreach (var pair in _progress.ToArray())
         {
+            if (_retryNotBefore.TryGetValue(pair.Key, out var retryAt) && retryAt > now) continue;
             if (!ShouldPersist(pair.Value, now)) continue;
             if (!_progress.TryRemove(pair.Key, out var snapshot)) continue;
+            if (_checkpoints.TryGetValue(snapshot.Id, out var latest) &&
+                (snapshot.RunId < latest.RunId ||
+                 (snapshot.RunId == latest.RunId && snapshot.UpdatedAt <= latest.UpdatedAt))) continue;
 
             try
             {
                 await _repository.UpsertAsync(snapshot, CancellationToken.None).ConfigureAwait(false);
                 RecordCheckpoint(snapshot);
+                _retryNotBefore.Remove(snapshot.Id);
             }
             catch
             {
+                // A locked or unavailable database must not become a zero-delay
+                // retry loop that pins a CPU core while the UI appears frozen.
+                _retryNotBefore[snapshot.Id] = DateTimeOffset.UtcNow + ProgressCheckpointInterval;
                 _progress.AddOrUpdate(
                     snapshot.Id,
                     snapshot,
@@ -123,6 +132,12 @@ public sealed class DownloadPersistenceWorker : IAsyncDisposable
         TimeSpan? shortest = null;
         foreach (var pair in _progress)
         {
+            if (_retryNotBefore.TryGetValue(pair.Key, out var retryAt) && retryAt > now)
+            {
+                var retryWait = retryAt - now;
+                if (shortest is null || retryWait < shortest.Value) shortest = retryWait;
+                continue;
+            }
             if (ShouldPersist(pair.Value, now)) return TimeSpan.Zero;
             if (!_checkpoints.TryGetValue(pair.Key, out var checkpoint)) return TimeSpan.Zero;
 
@@ -154,6 +169,7 @@ public sealed class DownloadPersistenceWorker : IAsyncDisposable
             snapshot.State,
             snapshot.OperationState,
             snapshot.DownloadedBytes,
+            snapshot.UpdatedAt,
             DateTimeOffset.UtcNow);
     }
 
@@ -181,5 +197,6 @@ public sealed class DownloadPersistenceWorker : IAsyncDisposable
         DownloadTaskState State,
         DurableOperationState OperationState,
         long DownloadedBytes,
+        DateTimeOffset UpdatedAt,
         DateTimeOffset PersistedAt);
 }

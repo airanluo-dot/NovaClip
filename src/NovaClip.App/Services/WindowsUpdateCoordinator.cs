@@ -12,6 +12,8 @@ public sealed class WindowsUpdateCoordinator : IDisposable
     private readonly SemaphoreSlim _applyGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
     private int _disposed;
+    private readonly object _lifecycleLock = new();
+    private int _activeOperations;
 
     public WindowsUpdateCoordinator(
         IUpdateService updateService,
@@ -26,15 +28,18 @@ public sealed class WindowsUpdateCoordinator : IDisposable
 
     public void Stop()
     {
-        _lifetime.Cancel();
+        lock (_lifecycleLock)
+        {
+            if (_disposed == 0) _lifetime.Cancel();
+        }
     }
 
     public async Task<AppUpdateInfo?> CheckAsync(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        using var operation = EnterOperation();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
         LatestUpdate = await _updateService.CheckForUpdateAsync(AppServices.CurrentVersion, _settings.UpdateChannel, linked.Token).ConfigureAwait(false);
-        if (LatestUpdate is not null)
+        if (Volatile.Read(ref _disposed) == 0 && LatestUpdate is not null)
         {
             try { UpdateAvailable?.Invoke(this, LatestUpdate); }
             catch (Exception exception) { StartupDiagnostics.Warning("Update notification failed.", exception); }
@@ -57,7 +62,7 @@ public sealed class WindowsUpdateCoordinator : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(update);
-        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        using var operation = EnterOperation();
         if (!await _applyGate.WaitAsync(0, cancellationToken).ConfigureAwait(false)) return false;
 
         var tempRoot = Path.Combine(Path.GetTempPath(), "NovaClip", "updates", Guid.NewGuid().ToString("N"));
@@ -108,9 +113,21 @@ public sealed class WindowsUpdateCoordinator : IDisposable
             info.ArgumentList.Add("--restart");
             info.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "NovaClip.exe"));
 
-            await AppServices.PrepareForUpdateAsync(linked.Token).ConfigureAwait(true);
-            if (Process.Start(info) is null) return false;
-            handedOff = true;
+            // Verify the updater can start before shutting down the download queue.
+            // It waits for this process to exit before touching application files.
+            using var updaterProcess = Process.Start(info);
+            if (updaterProcess is null) return false;
+            try
+            {
+                await AppServices.PrepareForUpdateAsync(linked.Token).ConfigureAwait(true);
+                handedOff = true;
+            }
+            catch
+            {
+                try { if (!updaterProcess.HasExited) updaterProcess.Kill(); }
+                catch (InvalidOperationException) { }
+                throw;
+            }
             App.MainWindow?.DispatcherQueue.TryEnqueue(() => App.MainWindow.Close());
             StartupDiagnostics.Info($"Update handoff completed: version={update.Version}, package={packageType}.");
             return true;
@@ -170,12 +187,47 @@ public sealed class WindowsUpdateCoordinator : IDisposable
         Path.GetFileName(name) == name &&
         name.IndexOfAny(['/', '\\', '\0']) < 0;
 
-    public void Dispose()
+    private OperationLease EnterOperation()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        _lifetime.Cancel();
+        lock (_lifecycleLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            _activeOperations++;
+            return new OperationLease(this);
+        }
+    }
+
+    private void ExitOperation()
+    {
+        lock (_lifecycleLock)
+        {
+            if (--_activeOperations == 0 && _disposed != 0) DisposeResources();
+        }
+    }
+
+    private void DisposeResources()
+    {
         _lifetime.Dispose();
         _applyGate.Dispose();
+    }
+
+    public void Dispose()
+    {
+        lock (_lifecycleLock)
+        {
+            if (_disposed != 0) return;
+            _disposed = 1;
+            _lifetime.Cancel();
+            // An in-flight apply still owns the semaphore and cancellation source.
+            // Its finally block must release the gate before these can be disposed.
+            if (_activeOperations == 0) DisposeResources();
+        }
         GC.SuppressFinalize(this);
+    }
+
+    private sealed class OperationLease(WindowsUpdateCoordinator owner) : IDisposable
+    {
+        private WindowsUpdateCoordinator? _owner = owner;
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.ExitOperation();
     }
 }

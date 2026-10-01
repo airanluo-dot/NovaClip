@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using NovaClip.Core;
+using NovaClip.Infrastructure;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -30,12 +31,127 @@ public sealed partial class DownloadsPage : Page
         StartupDiagnostics.Info("DownloadsPage.Ready");
     }
 
+    private async void NewFileButton_Click(object sender, RoutedEventArgs e)
+    {
+        NewFileButton.IsEnabled = false;
+        try
+        {
+            var urlBox = new TextBox { Header = Text.GetString("DirectFile_Url"), PlaceholderText = "https://", MaxLength = 8192 };
+            var nameBox = new TextBox { Header = Text.GetString("DirectFile_Name"), MaxLength = 180 };
+            var folderBox = new TextBox { Header = Text.GetString("DirectFile_Folder"), Text = AppServices.Settings.DownloadDirectory, MaxLength = 1024 };
+            var choose = new Button { Content = Text.GetString("DirectFile_ChooseFolder") };
+            var error = new TextBlock { TextWrapping = TextWrapping.Wrap };
+            var panel = new StackPanel { Spacing = 14, MinWidth = 300, MaxWidth = 520 };
+            panel.Children.Add(urlBox); panel.Children.Add(nameBox); panel.Children.Add(folderBox); panel.Children.Add(choose); panel.Children.Add(error);
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot, Title = Text.GetString("DirectFile_Title"), Content = panel,
+                PrimaryButtonText = Text.GetString("DirectFile_Start"), CloseButtonText = Text.GetString("Common_Cancel"),
+                DefaultButton = ContentDialogButton.Primary, IsPrimaryButtonEnabled = false
+            };
+            DownloadRequest? prepared = null;
+            void Validate()
+            {
+                try
+                {
+                    prepared = DirectFileRequestFactory.Create(urlBox.Text, folderBox.Text, nameBox.Text,
+                        new RetryPolicy(AppServices.Settings.MaxRetryAttempts));
+                    dialog.IsPrimaryButtonEnabled = true;
+                    error.Text = string.Empty;
+                }
+                catch (ArgumentException)
+                {
+                    prepared = null;
+                    dialog.IsPrimaryButtonEnabled = false;
+                    error.Text = string.IsNullOrWhiteSpace(urlBox.Text) ? string.Empty : Text.GetString("DirectFile_Invalid");
+                }
+            }
+            urlBox.TextChanged += (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(nameBox.Text) && DirectFileRequestFactory.TryParseUrl(urlBox.Text, out var uri))
+                    nameBox.Text = DirectFileRequestFactory.SuggestFileName(uri!);
+                Validate();
+            };
+            nameBox.TextChanged += (_, _) => Validate();
+            folderBox.TextChanged += (_, _) => Validate();
+            choose.Click += async (_, _) =>
+            {
+                choose.IsEnabled = false;
+                try
+                {
+                    if (App.MainWindow is not { } window) return;
+                    var picker = new global::Windows.Storage.Pickers.FolderPicker();
+                    picker.FileTypeFilter.Add("*");
+                    WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
+                    var folder = await picker.PickSingleFolderAsync();
+                    if (folder is not null) folderBox.Text = folder.Path;
+                }
+                catch (Exception exception)
+                {
+                    error.Text = Text.GetString("DirectFile_FolderFailed");
+                    StartupDiagnostics.Warning("Direct file folder picker failed.", exception);
+                }
+                finally { choose.IsEnabled = true; }
+            };
+            dialog.PrimaryButtonClick += async (_, args) =>
+            {
+                args.Cancel = true;
+                var deferral = args.GetDeferral();
+                dialog.IsPrimaryButtonEnabled = false;
+                try
+                {
+                    Validate();
+                    if (prepared is null) return;
+                    dialog.IsPrimaryButtonEnabled = false;
+                    await AppServices.Downloads.EnqueueAsync(prepared);
+                    args.Cancel = false;
+                    StatusBar.Message = Text.GetString("Download_Queued");
+                    StatusBar.Severity = InfoBarSeverity.Success;
+                    StatusBar.IsOpen = true;
+                }
+                catch (Exception exception)
+                {
+                    error.Text = Text.GetString("DirectFile_CreateFailed");
+                    StartupDiagnostics.Warning("Direct file task creation failed.", exception);
+                }
+                finally { dialog.IsPrimaryButtonEnabled = prepared is not null; deferral.Complete(); }
+            };
+            await dialog.ShowAsync();
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Warning("Direct file dialog failed.", exception);
+            StatusBar.Message = Text.GetString("DirectFile_CreateFailed");
+            StatusBar.Severity = InfoBarSeverity.Error; StatusBar.IsOpen = true;
+        }
+        finally { NewFileButton.IsEnabled = true; }
+    }
+
+    internal void ShowSmokePreview()
+    {
+        if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") != "1") return;
+        var now = DateTimeOffset.UtcNow;
+        foreach (var state in new[] { DownloadTaskState.DownloadingVideo, DownloadTaskState.Paused, DownloadTaskState.Completed })
+        {
+            AddRow(new DownloadTaskSnapshot
+            {
+                Id = Guid.NewGuid(), PageUrl = "https://example.invalid/preview",
+                Title = "NovaClip · UI preview / 界面检查", State = state,
+                CreatedAt = now, UpdatedAt = now, OutputPath = "Preview.mp4",
+                DownloadedBytes = state == DownloadTaskState.Completed ? 100 : 42,
+                TotalBytes = 100
+            });
+        }
+        TaskList.IsHitTestVisible = false;
+    }
+
     private void AddRow(DownloadTaskSnapshot snapshot)
     {
         if (_rowById.ContainsKey(snapshot.Id)) return;
         var row = new DownloadRow(snapshot);
         _rowById[snapshot.Id] = row;
         _rows.Add(row);
+        EmptyState.Visibility = Visibility.Collapsed;
     }
 
     private void DownloadsPage_Loaded(object sender, RoutedEventArgs e)
@@ -132,6 +248,13 @@ public sealed partial class DownloadsPage : Page
                 return string.IsNullOrWhiteSpace(localized) ? State.ToString() : localized;
             }
         }
+        public bool CanPauseResume => State is DownloadTaskState.Paused or DownloadTaskState.Failed
+            or DownloadTaskState.Queued or DownloadTaskState.Resolving
+            or DownloadTaskState.DownloadingVideo or DownloadTaskState.DownloadingAudio
+            or DownloadTaskState.DownloadingSegments or DownloadTaskState.DownloadingFile;
+        public bool CanCancel => State is not (DownloadTaskState.Completed or DownloadTaskState.Cancelled);
+        public string PauseResumeText => Text.GetString(State is DownloadTaskState.Paused or DownloadTaskState.Failed
+            ? "Downloads_ResumeAction" : "Downloads_PauseAction");
         public string? ErrorMessage => Snapshot.ErrorMessage;
         public double ProgressFraction => Snapshot.TotalBytes is > 0
             ? Math.Clamp((double)Snapshot.DownloadedBytes / Snapshot.TotalBytes.Value, 0, 1)

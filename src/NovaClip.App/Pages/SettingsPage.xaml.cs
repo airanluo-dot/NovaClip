@@ -14,6 +14,7 @@ public sealed partial class SettingsPage : Page
     public SettingsPage()
     {
         InitializeComponent();
+        VersionText.Text = _text.Format("Settings_VersionFormat", AppServices.CurrentVersion.Split('+')[0]);
         Loaded += SettingsPage_Loaded;
     }
 
@@ -21,6 +22,8 @@ public sealed partial class SettingsPage : Page
     {
         var settings = AppServices.Settings;
         DownloadDirectoryText.Text = settings.DownloadDirectory;
+        DownloadConnectionsBox.Value = settings.MaxDownloadConnections;
+        DownloadSpeedBox.Value = settings.DownloadSpeedLimitKiB;
         ConcurrencyButtons.SelectedItem = FindByTag(ConcurrencyButtons.Items, settings.MaxConcurrentTasks.ToString(CultureInfo.InvariantCulture));
         QualityBox.SelectedItem = FindByTag(QualityBox.Items, settings.DefaultQuality);
         CodecBox.SelectedItem = FindByTag(CodecBox.Items, settings.DefaultCodec);
@@ -34,6 +37,28 @@ public sealed partial class SettingsPage : Page
         ChannelButtons.SelectedItem = FindByTag(ChannelButtons.Items, settings.UpdateChannel.ToString());
         ThemeBox.SelectedItem = FindByTag(ThemeBox.Items, settings.Theme);
         RefreshFfmpegStatus();
+        _loading = false;
+    }
+
+    private void DownloadConnections_Changed(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_loading || !double.IsFinite(sender.Value)) return;
+        var value = (int)Math.Clamp(Math.Round(sender.Value), 1, 256);
+        try { AppServices.SettingsCoordinator.Apply(settings => settings.MaxDownloadConnections = value); }
+        catch (Exception exception) { ShowSettingsError("SETTINGS_SAVE_FAILED", exception); }
+        _loading = true;
+        sender.Value = AppServices.Settings.MaxDownloadConnections;
+        _loading = false;
+    }
+
+    private void DownloadSpeed_Changed(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_loading || !double.IsFinite(sender.Value)) return;
+        var value = (int)Math.Clamp(Math.Round(sender.Value), 0, 1_048_576);
+        try { AppServices.SettingsCoordinator.Apply(settings => settings.DownloadSpeedLimitKiB = value); }
+        catch (Exception exception) { ShowSettingsError("SETTINGS_SAVE_FAILED", exception); }
+        _loading = true;
+        sender.Value = AppServices.Settings.DownloadSpeedLimitKiB;
         _loading = false;
     }
 
@@ -106,7 +131,7 @@ public sealed partial class SettingsPage : Page
             var dialog = new ContentDialog { XamlRoot = XamlRoot, Title = _text.GetString("Settings_ClearLoginTitle"), Content = _text.GetString("Settings_ClearLoginMessage"), PrimaryButtonText = _text.GetString("Common_Clear"), CloseButtonText = _text.GetString("Common_Cancel"), DefaultButton = ContentDialogButton.Close };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
             var page = BrowserPage.Instance;
-            if (page?.HasInitializedWebView == true)
+            if (page is not null)
             {
                 await page.ClearSessionAsync();
             }

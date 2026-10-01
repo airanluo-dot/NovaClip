@@ -45,9 +45,64 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    public void RunSmokeNavigation()
+    public async Task RunSmokeNavigationAsync()
     {
-        foreach (var tag in new[] { "downloads", "history", "settings", "browser" }) NavigateTo(tag);
+        AppWindow.Resize(new global::Windows.Graphics.SizeInt32(1200, 900));
+        await Task.Delay(300);
+        var browser = Pages.BrowserPage.Instance ?? throw new InvalidOperationException("BROWSER_CACHE_MISSING");
+        foreach (var tag in new[] { "downloads", "history", "settings", "browser" })
+        {
+            NavigateTo(tag);
+            // Allow Loaded/Unloaded to run before checking cached ownership.
+            await Task.Delay(700);
+            if (!ReferenceEquals(Pages.BrowserPage.Instance, browser))
+                throw new InvalidOperationException("BROWSER_CACHE_OWNERSHIP_LOST");
+            if (tag != "browser") await CaptureSmokePageAsync(tag);
+            if (ContentFrame.Content is Pages.DownloadsPage downloads)
+            {
+                downloads.ShowSmokePreview();
+                await Task.Delay(300);
+                await CaptureSmokePageAsync("downloads-populated");
+                RootNavigationView.RequestedTheme = ElementTheme.Dark;
+                await Task.Delay(300);
+                await CaptureSmokePageAsync("downloads-dark");
+                RootNavigationView.RequestedTheme = ElementTheme.Light;
+            }
+        }
+        StartupDiagnostics.Info("Browser.CacheOwnershipVerified");
+    }
+
+    private async Task CaptureSmokePageAsync(string tag)
+    {
+        // CI-only, freshly initialized test profile; never capture a user's session.
+        try
+        {
+            var bitmap = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
+            ContentFrame.UpdateLayout();
+            await bitmap.RenderAsync(ContentFrame.Content as UIElement ?? ContentFrame);
+            if (bitmap.PixelWidth == 0 || bitmap.PixelHeight == 0)
+                throw new InvalidOperationException("UI_CAPTURE_EMPTY");
+            var pixels = await bitmap.GetPixelsAsync();
+            var bytes = new byte[pixels.Length];
+            using (var reader = global::Windows.Storage.Streams.DataReader.FromBuffer(pixels))
+                reader.ReadBytes(bytes);
+            var directory = Path.Combine(AppContext.BaseDirectory, "ui-smoke");
+            Directory.CreateDirectory(directory);
+            var folder = await global::Windows.Storage.StorageFolder.GetFolderFromPathAsync(directory);
+            var file = await folder.CreateFileAsync(tag + ".png", global::Windows.Storage.CreationCollisionOption.ReplaceExisting);
+            using var stream = await file.OpenAsync(global::Windows.Storage.FileAccessMode.ReadWrite);
+            var encoder = await global::Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(
+                global::Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId, stream);
+            encoder.SetPixelData(global::Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8,
+                global::Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied,
+                (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, 96, 96, bytes);
+            await encoder.FlushAsync();
+            StartupDiagnostics.Info("UI.Captured:" + tag);
+        }
+        catch (Exception exception)
+        {
+            StartupDiagnostics.Warning("UI capture unavailable: " + tag, exception);
+        }
     }
 
     public void ApplyTheme(string theme)

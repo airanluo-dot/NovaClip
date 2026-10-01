@@ -68,6 +68,8 @@ public static class AppServices
             };
 
             Downloader = new HttpRangeDownloader(MediaHttpClient);
+            Downloader.Connections.SetLimit(Settings.MaxDownloadConnections);
+            Downloader.Bandwidth.SetLimit(Settings.DownloadSpeedLimitKiB * 1024L);
             Ffmpeg = new WindowsFfmpegService(Settings);
             Repository = new SqliteDownloadTaskRepository(ResolveDatabasePath());
             Reservations = new OutputReservationService();
@@ -81,7 +83,7 @@ public static class AppServices
                 Repository);
             UpdateService = new GitHubReleaseUpdateService(UpdateHttpClient, Settings.UpdateFeedRepository, WindowsSettingsStore.GitHubToken);
             UpdateCoordinator = new WindowsUpdateCoordinator(UpdateService, Settings);
-            SettingsCoordinator = new SettingsApplicationCoordinator(Settings, Downloads);
+            SettingsCoordinator = new SettingsApplicationCoordinator(Settings, Downloads, Downloader.Connections, Downloader.Bandwidth);
 
             StartupDiagnostics.Info("Initializing SQLite repository.");
             await Repository.InitializeAsync(cancellationToken).ConfigureAwait(true);
@@ -118,7 +120,7 @@ public static class AppServices
 
     private static async Task ShutdownAsyncCore()
     {
-        if (!IsInitialized || Interlocked.Exchange(ref _shutdownCompleted, 1) != 0) return;
+        if (Interlocked.Exchange(ref _shutdownCompleted, 1) != 0) return;
 
         await ShutdownGate.WaitAsync().ConfigureAwait(false);
         try
@@ -150,6 +152,7 @@ public static class AppServices
         }
         finally
         {
+            IsInitialized = false;
             ShutdownGate.Release();
         }
     }

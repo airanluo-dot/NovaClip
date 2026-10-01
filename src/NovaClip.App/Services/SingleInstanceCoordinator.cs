@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using NovaClip.Infrastructure;
 
 namespace NovaClip.App;
 
@@ -101,9 +102,18 @@ public sealed class SingleInstanceCoordinator : IDisposable
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous);
                 await server.WaitForConnectionAsync(_stopSource.Token).ConfigureAwait(false);
-                using var reader = new StreamReader(server, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, 256, leaveOpen: false);
-                var command = await reader.ReadLineAsync().ConfigureAwait(false);
-                if (command is null || Encoding.UTF8.GetByteCount(command) > MaxCommandBytes) continue;
+                string? command;
+                using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stopSource.Token))
+                {
+                    deadline.CancelAfter(TimeSpan.FromSeconds(2));
+                    try
+                    {
+                        command = await ActivationMessageReader.ReadAsync(server, MaxCommandBytes, deadline.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!_stopSource.IsCancellationRequested) { continue; }
+                    catch (Exception exception) when (exception is IOException or DecoderFallbackException) { continue; }
+                }
+                if (command is null) continue;
 
                 try
                 {

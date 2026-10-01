@@ -80,6 +80,25 @@ public sealed partial class HistoryPage : Page
         finally
         {
             _loading = false;
+            EmptyState.Visibility = _items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    private async void HistoryList_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not DownloadTaskSnapshot item) return;
+        try
+        {
+            var file = await global::Windows.Storage.StorageFile.GetFileFromPathAsync(item.OutputPath);
+            if (!await global::Windows.System.Launcher.LaunchFileAsync(file))
+                throw new InvalidOperationException("FILE_LAUNCH_DECLINED");
+        }
+        catch (Exception exception)
+        {
+            HistoryInfoBar.Severity = InfoBarSeverity.Warning;
+            HistoryInfoBar.Message = new LocalizationService().GetString("History_OpenFailed");
+            HistoryInfoBar.IsOpen = true;
+            StartupDiagnostics.Warning("History file could not be opened.", exception);
         }
     }
 

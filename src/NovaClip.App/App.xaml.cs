@@ -49,7 +49,11 @@ public partial class App : Application
         {
             var launchArgument = args.Arguments;
             _singleInstance = await SingleInstanceCoordinator.AcquireOrForwardAsync(launchArgument);
-            if (_singleInstance is null) return;
+            if (_singleInstance is null)
+            {
+                Exit();
+                return;
+            }
             _singleInstance.ActivateRequested += SingleInstance_ActivateRequested;
 
             await AppServices.InitializeAsync();
@@ -65,7 +69,7 @@ public partial class App : Application
             MainWindow.DispatcherQueue.TryEnqueue(() => ApplyActivationArgument(launchArgument));
             if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") == "1")
             {
-                MainWindow.DispatcherQueue.TryEnqueue(MainWindow.RunSmokeNavigation);
+                await MainWindow.RunSmokeNavigationAsync();
             }
 
             StartupDiagnostics.Info("App.StartupCompleted");

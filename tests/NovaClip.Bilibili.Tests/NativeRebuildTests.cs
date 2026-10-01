@@ -46,6 +46,26 @@ public sealed class NativeRebuildTests
         Assert.Equal("https://b23.tv/abc", uri.ToString());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RepeatedDetectionKeepsPreviouslyRecognizedMediaReady(bool viaObservation)
+    {
+        var strategy = new BlockingStrategy();
+        strategy.Complete();
+        var coordinator = new MediaDetectionCoordinator([strategy]);
+        coordinator.BeginNavigation(new Uri("https://www.bilibili.com/video/BV1ab411c7mD"));
+        await coordinator.DetectAsync();
+        Assert.Equal(MediaDetectionState.Ready, coordinator.Snapshot.State);
+        if (viaObservation)
+            await coordinator.ObserveAsync(new PlayUrlObservation(new Uri("https://api.bilibili.com/x/player/playurl"), "{}", coordinator.Snapshot.Page!.NavigationGeneration, DateTimeOffset.UtcNow));
+        else
+            await coordinator.DetectAsync();
+        Assert.Equal(MediaDetectionState.Ready, coordinator.Snapshot.State);
+        Assert.NotNull(coordinator.Snapshot.Media);
+        Assert.Null(coordinator.Snapshot.ErrorCode);
+    }
+
     private sealed class BlockingStrategy : IMediaDetectionStrategy
     {
         private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);

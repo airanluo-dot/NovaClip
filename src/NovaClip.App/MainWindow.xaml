@@ -7,7 +7,7 @@
             <RowDefinition Height="48" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <Grid x:Name="AppTitleBar" Grid.Row="0" Padding="16,0" ColumnSpacing="10">
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Padding="20,0" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="24" />
                 <ColumnDefinition Width="Auto" />
@@ -17,13 +17,15 @@
             <TextBlock Grid.Column="1" x:Uid="App_Name" VerticalAlignment="Center" FontWeight="SemiBold" />
             <TextBlock Grid.Column="2" x:Name="PageTitle" VerticalAlignment="Center" Opacity="0.7" />
         </Grid>
-        <NavigationView x:Name="RootNavigationView" Grid.Row="1" IsSettingsVisible="True" IsBackEnabled="False" PaneDisplayMode="Auto" SelectionChanged="RootNavigationView_SelectionChanged">
+        <NavigationView x:Name="RootNavigationView" Grid.Row="1" IsSettingsVisible="True" IsBackEnabled="False" PaneDisplayMode="Auto" OpenPaneLength="224" CompactPaneLength="56" IsPaneToggleButtonVisible="True" SelectionChanged="RootNavigationView_SelectionChanged">
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Uid="Navigation_Browser" Tag="browser"><NavigationViewItem.Icon><SymbolIcon Symbol="World" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem x:Uid="Navigation_Downloads" Tag="downloads"><NavigationViewItem.Icon><SymbolIcon Symbol="Download" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem x:Uid="Navigation_History" Tag="history"><NavigationViewItem.Icon><SymbolIcon Symbol="Clock" /></NavigationViewItem.Icon></NavigationViewItem>
             </NavigationView.MenuItems>
-            <Frame x:Name="ContentFrame" />
+            <Border Background="{ThemeResource LayerFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1,1,0,0" CornerRadius="16,0,0,0">
+                <Frame x:Name="ContentFrame" />
+            </Border>
         </NavigationView>
     </Grid>
 </Window>
