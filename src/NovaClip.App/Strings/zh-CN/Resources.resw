@@ -21,4 +21,6 @@
   <data name="Downloads_CancelAction.Content" xml:space="preserve"><value>取消</value></data>
   <data name="Settings_VersionFormat" xml:space="preserve"><value>版本 {0}</value></data>
   <data name="Settings_OpenReleases.Content" xml:space="preserve"><value>查看版本说明与下载安装包</value></data>
+  <data name="History_OpenFailed" xml:space="preserve"><value>无法打开文件，它可能已被移动或删除。请检查下载文件夹。</value></data>
+  <data name="DownloadState_DownloadingFile" xml:space="preserve"><value>正在下载文件</value></data>
 </root>

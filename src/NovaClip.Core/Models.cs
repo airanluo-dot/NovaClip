@@ -4,7 +4,8 @@ public enum TrackType
 {
     Video,
     Audio,
-    Segment
+    Segment,
+    File
 }
 
 public enum DownloadTaskState
@@ -19,7 +20,8 @@ public enum DownloadTaskState
     Finalizing,
     Completed,
     Failed,
-    Cancelled
+    Cancelled,
+    DownloadingFile
 }
 
 public enum DurableOperationState
@@ -43,7 +45,8 @@ public enum ResolverStrategy
 {
     PageData,
     PlayUrlResponse,
-    HydrateData
+    HydrateData,
+    DirectFile
 }
 
 public enum UpdateChannel
@@ -105,6 +108,7 @@ public sealed class MediaDescriptor
     public IReadOnlyList<MediaTrack> Tracks { get; init; } = [];
     public IReadOnlyList<LegacyMediaSegment> LegacySegments { get; init; } = [];
 
+    public MediaTrack? FileTrack => Tracks.FirstOrDefault(track => track.Type == TrackType.File);
     public MediaTrack? VideoTrack => Tracks.FirstOrDefault(track => track.Type == TrackType.Video);
     public MediaTrack? AudioTrack => Tracks.FirstOrDefault(track => track.Type == TrackType.Audio);
 }
@@ -130,7 +134,10 @@ public sealed record DownloadRequest(
     RetryPolicy RetryPolicy,
     bool MergeAfterDownload = true,
     bool DeleteTemporaryFilesAfterMerge = true,
-    MediaRequestHeaders? RequestHeaders = null);
+    MediaRequestHeaders? RequestHeaders = null)
+{
+    public MediaTrack? FileTrack => Media.FileTrack;
+}
 
 public sealed record TrackProgress(
     TrackType TrackType,

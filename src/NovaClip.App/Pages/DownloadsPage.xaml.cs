@@ -154,7 +154,7 @@ public sealed partial class DownloadsPage : Page
         public bool CanPauseResume => State is DownloadTaskState.Paused or DownloadTaskState.Failed
             or DownloadTaskState.Queued or DownloadTaskState.Resolving
             or DownloadTaskState.DownloadingVideo or DownloadTaskState.DownloadingAudio
-            or DownloadTaskState.DownloadingSegments;
+            or DownloadTaskState.DownloadingSegments or DownloadTaskState.DownloadingFile;
         public bool CanCancel => State is not (DownloadTaskState.Completed or DownloadTaskState.Cancelled);
         public string PauseResumeText => Text.GetString(State is DownloadTaskState.Paused or DownloadTaskState.Failed
             ? "Downloads_ResumeAction" : "Downloads_PauseAction");

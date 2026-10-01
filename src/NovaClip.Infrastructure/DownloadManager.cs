@@ -321,7 +321,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 Publish(snapshot);
             });
 
-            var downloadState = work.Request.Media.LegacySegments.Count > 0 && work.Request.VideoTrack is null && work.Request.AudioTrack is null
+            var downloadState = work.Request.FileTrack is not null ? DownloadTaskState.DownloadingFile : work.Request.Media.LegacySegments.Count > 0 && work.Request.VideoTrack is null && work.Request.AudioTrack is null
                 ? DownloadTaskState.DownloadingSegments
                 : work.Request.VideoTrack is not null
                     ? DownloadTaskState.DownloadingVideo
@@ -386,11 +386,11 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             }
             else
             {
-                var track = work.Request.VideoTrack ?? work.Request.AudioTrack;
+                var track = work.Request.FileTrack ?? work.Request.VideoTrack ?? work.Request.AudioTrack;
                 if (track is null) throw new InvalidOperationException("The download request has no finalizable track.");
-                var partName = track.Type == TrackType.Video ? "video.m4s.part" : "audio.m4s.part";
+                var partName = track.Type == TrackType.File ? "file.part" : track.Type == TrackType.Video ? "video.m4s.part" : "audio.m4s.part";
                 var staging = Path.Combine(taskRoot, partName);
-                ValidateStagingFile(staging);
+                ValidateStagingFile(staging, track.Type == TrackType.File);
                 await CommitPrimaryAsync(work, staging, run.StopSource.Token).ConfigureAwait(false);
             }
 
@@ -473,7 +473,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
     private async Task CommitPrimaryAsync(DownloadWork work, string stagingPath, CancellationToken cancellationToken)
     {
-        ValidateStagingFile(stagingPath);
+        ValidateStagingFile(stagingPath, work.Request.FileTrack is not null);
         OutputReservation reservation;
         lock (work.Gate) reservation = work.Reservation;
         var committed = await _reservations.CommitAsync(reservation, stagingPath, cancellationToken).ConfigureAwait(false);
@@ -520,7 +520,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             var operationState = state switch
             {
                 DownloadTaskState.Queued or DownloadTaskState.Resolving => DurableOperationState.Preparing,
-                DownloadTaskState.DownloadingVideo or DownloadTaskState.DownloadingAudio or DownloadTaskState.DownloadingSegments => DurableOperationState.Downloading,
+                DownloadTaskState.DownloadingVideo or DownloadTaskState.DownloadingAudio or DownloadTaskState.DownloadingSegments or DownloadTaskState.DownloadingFile => DurableOperationState.Downloading,
                 DownloadTaskState.Merging or DownloadTaskState.Finalizing =>
                     work.Snapshot.OperationState is DurableOperationState.Committed or DurableOperationState.CleanupPending
                         ? work.Snapshot.OperationState
@@ -663,10 +663,10 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         try { await task.ConfigureAwait(false); } catch { }
     }
 
-    private static void ValidateStagingFile(string path)
+    private static void ValidateStagingFile(string path, bool allowEmpty = false)
     {
         if (!File.Exists(path)) throw new FileNotFoundException("The staging output does not exist.", path);
-        if (new FileInfo(path).Length <= 0) throw new InvalidDataException("The staging output is empty.");
+        if (!allowEmpty && new FileInfo(path).Length <= 0) throw new InvalidDataException("The staging output is empty.");
     }
 
     private static bool IsSafeTaskRoot(string path)
@@ -743,10 +743,10 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                     track.Size,
                     null))
                 .ToArray();
-            var mediaTracks = tracks.Where(track => track.Type is TrackType.Video or TrackType.Audio).ToArray();
+            var mediaTracks = tracks.Where(track => track.Type is TrackType.Video or TrackType.Audio or TrackType.File).ToArray();
             var video = mediaTracks.FirstOrDefault(track => track.Type == TrackType.Video);
             var audio = mediaTracks.FirstOrDefault(track => track.Type == TrackType.Audio);
-            if (legacySegments.Length == 0 && video is null && audio is null) return null;
+            if (legacySegments.Length == 0 && video is null && audio is null && !mediaTracks.Any(track => track.Type == TrackType.File)) return null;
 
             var media = new MediaDescriptor
             {
@@ -808,7 +808,10 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         ArgumentNullException.ThrowIfNull(request.Media.LegacySegments);
         if (string.IsNullOrWhiteSpace(request.OutputDirectory) || !Path.IsPathRooted(request.OutputDirectory)) throw new ArgumentException("The output directory must be absolute.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.OutputFileName) || request.OutputFileName is "." or ".." || request.OutputFileName.IndexOfAny(['/', '\\', '\0']) >= 0 || Path.GetFileName(request.OutputFileName) != request.OutputFileName) throw new ArgumentException("The output file name must be a single safe file name.", nameof(request));
-        if (request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count == 0) throw new ArgumentException("The download request has no media tracks.", nameof(request));
+        if (request.FileTrack is null && request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count == 0) throw new ArgumentException("The download request has no media tracks.", nameof(request));
+        ValidateTrack(request.FileTrack, TrackType.File);
+        if (request.FileTrack is not null && (request.VideoTrack is not null || request.AudioTrack is not null || request.Media.LegacySegments.Count != 0 || request.Media.Tracks.Count != 1))
+            throw new ArgumentException("A file download cannot mix media tracks.", nameof(request));
         ValidateTrack(request.VideoTrack, TrackType.Video);
         ValidateTrack(request.AudioTrack, TrackType.Audio);
         if (request.VideoTrack is not null && request.AudioTrack is not null && string.Equals(request.VideoTrack.TrackId, request.AudioTrack.TrackId, StringComparison.Ordinal)) throw new ArgumentException("The media track IDs must be unique.", nameof(request));

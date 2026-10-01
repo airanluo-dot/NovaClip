@@ -18,4 +18,6 @@
   <data name="Downloads_CancelAction.Content" xml:space="preserve"><value>Cancel</value></data>
   <data name="Settings_VersionFormat" xml:space="preserve"><value>Version {0}</value></data>
   <data name="Settings_OpenReleases.Content" xml:space="preserve"><value>View releases and download installer</value></data>
+  <data name="History_OpenFailed" xml:space="preserve"><value>The file could not be opened. It may have been moved or deleted. Check your download folder.</value></data>
+  <data name="DownloadState_DownloadingFile" xml:space="preserve"><value>Downloading file</value></data>
 </root>
