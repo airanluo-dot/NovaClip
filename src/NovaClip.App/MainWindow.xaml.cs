@@ -47,6 +47,8 @@ public sealed partial class MainWindow : Window
 
     public async Task RunSmokeNavigationAsync()
     {
+        AppWindow.Resize(new global::Windows.Graphics.SizeInt32(1200, 900));
+        await Task.Delay(300);
         var browser = Pages.BrowserPage.Instance ?? throw new InvalidOperationException("BROWSER_CACHE_MISSING");
         foreach (var tag in new[] { "downloads", "history", "settings", "browser" })
         {
@@ -56,6 +58,16 @@ public sealed partial class MainWindow : Window
             if (!ReferenceEquals(Pages.BrowserPage.Instance, browser))
                 throw new InvalidOperationException("BROWSER_CACHE_OWNERSHIP_LOST");
             if (tag != "browser") await CaptureSmokePageAsync(tag);
+            if (ContentFrame.Content is Pages.DownloadsPage downloads)
+            {
+                downloads.ShowSmokePreview();
+                await Task.Delay(300);
+                await CaptureSmokePageAsync("downloads-populated");
+                RootNavigationView.RequestedTheme = ElementTheme.Dark;
+                await Task.Delay(300);
+                await CaptureSmokePageAsync("downloads-dark");
+                RootNavigationView.RequestedTheme = ElementTheme.Light;
+            }
         }
         StartupDiagnostics.Info("Browser.CacheOwnershipVerified");
     }

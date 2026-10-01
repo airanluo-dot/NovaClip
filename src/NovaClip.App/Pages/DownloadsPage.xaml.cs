@@ -30,6 +30,24 @@ public sealed partial class DownloadsPage : Page
         StartupDiagnostics.Info("DownloadsPage.Ready");
     }
 
+    internal void ShowSmokePreview()
+    {
+        if (Environment.GetEnvironmentVariable("NOVACLIP_CI_SMOKE") != "1") return;
+        var now = DateTimeOffset.UtcNow;
+        foreach (var state in new[] { DownloadTaskState.DownloadingVideo, DownloadTaskState.Paused, DownloadTaskState.Completed })
+        {
+            AddRow(new DownloadTaskSnapshot
+            {
+                Id = Guid.NewGuid(), PageUrl = "https://example.invalid/preview",
+                Title = "NovaClip · UI preview / 界面检查", State = state,
+                CreatedAt = now, UpdatedAt = now, OutputPath = "Preview.mp4",
+                DownloadedBytes = state == DownloadTaskState.Completed ? 100 : 42,
+                TotalBytes = 100
+            });
+        }
+        TaskList.IsHitTestVisible = false;
+    }
+
     private void AddRow(DownloadTaskSnapshot snapshot)
     {
         if (_rowById.ContainsKey(snapshot.Id)) return;

@@ -4,7 +4,7 @@
             <TextBlock x:Uid="Settings_Title" Style="{StaticResource PageHeadingStyle}" Margin="0,0,0,12" />
             <Expander x:Uid="Settings_General" IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                 <StackPanel Spacing="16" Padding="4,8,4,12">
-                    <ComboBox x:Name="ThemeBox" x:Uid="Settings_Theme" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch" MaxWidth="440">
+                    <ComboBox x:Name="ThemeBox" x:Uid="Settings_Theme" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch">
                         <ComboBoxItem x:Uid="Option_System" Tag="System" />
                         <ComboBoxItem x:Uid="Option_Light" Tag="Light" />
                         <ComboBoxItem x:Uid="Option_Dark" Tag="Dark" />
@@ -24,19 +24,19 @@
                         <RadioButton x:Uid="Settings_Concurrency2" Tag="2" />
                         <RadioButton x:Uid="Settings_Concurrency3" Tag="3" />
                     </RadioButtons>
-                    <ComboBox x:Name="QualityBox" x:Uid="Settings_DefaultQuality" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch" MaxWidth="440">
+                    <ComboBox x:Name="QualityBox" x:Uid="Settings_DefaultQuality" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch">
                         <ComboBoxItem x:Uid="Option_Highest" Tag="Highest" />
                         <ComboBoxItem x:Uid="Option_Player" Tag="Player" />
                         <ComboBoxItem x:Uid="Option_1080P" Tag="1080P" />
                         <ComboBoxItem x:Uid="Option_720P" Tag="720P" />
                     </ComboBox>
-                    <ComboBox x:Name="CodecBox" x:Uid="Settings_DefaultCodec" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch" MaxWidth="440">
+                    <ComboBox x:Name="CodecBox" x:Uid="Settings_DefaultCodec" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch">
                         <ComboBoxItem x:Uid="Option_Auto" Tag="Auto" />
                         <ComboBoxItem x:Uid="Option_AVC" Tag="AVC" />
                         <ComboBoxItem x:Uid="Option_HEVC" Tag="HEVC" />
                         <ComboBoxItem x:Uid="Option_AV1" Tag="AV1" />
                     </ComboBox>
-                    <ComboBox x:Name="RetryBox" x:Uid="Settings_Retry" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch" MaxWidth="440">
+                    <ComboBox x:Name="RetryBox" x:Uid="Settings_Retry" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch">
                         <ComboBoxItem x:Uid="Option_Standard" Tag="Standard" />
                         <ComboBoxItem x:Uid="Option_Aggressive" Tag="Aggressive" />
                         <ComboBoxItem x:Uid="Option_NoRetry" Tag="Off" />
@@ -45,11 +45,11 @@
             </Expander>
             <Expander x:Uid="Settings_Browser" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                 <StackPanel Spacing="16" Padding="4,8,4,12">
-                    <ComboBox x:Name="StartupBox" x:Uid="Settings_Startup" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch" MaxWidth="440">
+                    <ComboBox x:Name="StartupBox" x:Uid="Settings_Startup" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch">
                         <ComboBoxItem x:Uid="Option_Home" Tag="Home" />
                         <ComboBoxItem x:Uid="Option_LastPage" Tag="LastPage" />
                     </ComboBox>
-                    <ComboBox x:Name="ExternalLinksBox" x:Uid="Settings_ExternalLinks" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch" MaxWidth="440">
+                    <ComboBox x:Name="ExternalLinksBox" x:Uid="Settings_ExternalLinks" SelectionChanged="ImmediateSetting_Changed" HorizontalAlignment="Stretch">
                         <ComboBoxItem x:Uid="Option_SystemBrowser" Tag="System" />
                         <ComboBoxItem x:Uid="Option_Ask" Tag="Ask" />
                     </ComboBox>
