@@ -711,7 +711,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 var legacyRoot = Path.Combine(outputDirectory, ".bilinative", snapshot.Id.ToString("N"));
                 manifestPath = Path.Combine(legacyRoot, "task.json");
             }
-    
+
             if (!File.Exists(manifestPath) || new FileInfo(manifestPath).Length > MaxManifestCharacters * sizeof(char)) return null;
             var json = await File.ReadAllTextAsync(manifestPath, cancellationToken).ConfigureAwait(false);
             if (json.Length > MaxManifestCharacters) return null;

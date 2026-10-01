@@ -118,7 +118,7 @@ public static class AppServices
 
     private static async Task ShutdownAsyncCore()
     {
-        if (!IsInitialized || Interlocked.Exchange(ref _shutdownCompleted, 1) != 0) return;
+        if (Interlocked.Exchange(ref _shutdownCompleted, 1) != 0) return;
 
         await ShutdownGate.WaitAsync().ConfigureAwait(false);
         try
@@ -150,6 +150,7 @@ public static class AppServices
         }
         finally
         {
+            IsInitialized = false;
             ShutdownGate.Release();
         }
     }
