@@ -6,14 +6,17 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  create:
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: github.event_name != 'create' || (github.ref_type == 'branch' && startsWith(github.ref_name, 'publish/'))
     runs-on: windows-latest
     outputs:
+      version: ${{ steps.version.outputs.version }}
       runtime_identifier: ${{ steps.version.outputs.runtimeIdentifier }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -129,12 +132,25 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'create' && github.ref_type == 'branch' && github.actor == github.repository_owner && github.ref_name == format('publish/v{0}', needs.build.outputs.version))
     needs: build
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
+      - name: Validate explicit publication request
+        if: github.event_name == 'create'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$GITHUB_SHA" = "$main_sha" || { echo 'Publication branch must match current main'; exit 1; }
+          test "$GITHUB_REF_NAME" = "publish/v$RELEASE_VERSION"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing replacement'; exit 1
+          fi
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: NovaClip-${{ needs.build.outputs.runtime_identifier }}-${{ github.sha }}
@@ -142,6 +158,8 @@ jobs:
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           prerelease: true
-          name: NovaClip ${{ github.ref_name }} — Remediation and Safety Baseline
+          tag_name: v${{ needs.build.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: NovaClip v${{ needs.build.outputs.version }}
           generate_release_notes: true
           files: release-assets/*
