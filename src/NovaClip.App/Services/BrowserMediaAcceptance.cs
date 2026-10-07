@@ -11,7 +11,7 @@ namespace NovaClip.App;
 // It records identities and state codes, never media URLs, cookies or page HTML.
 internal static class BrowserMediaAcceptance
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true, WriteIndented = true };
     private const string PlaybackScript = """
         (() => {
           const video = document.querySelector('video');
@@ -82,7 +82,7 @@ internal static class BrowserMediaAcceptance
             {
                 var playback = JsonSerializer.Deserialize<PlaybackEvidence>(
                     await browser.ExecuteAcceptanceScriptAsync(PlaybackScript),
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    JsonOptions);
                 var snapshot = browser.AcceptanceSnapshot;
                 var stateKey = $"{snapshot.State}:{snapshot.Page?.NavigationGeneration}:{snapshot.Page?.Bvid}:{snapshot.Page?.Cid}:{snapshot.ErrorCode}:{browser.IsMediaCardReady}";
                 if (stateKey != previousStateKey)
