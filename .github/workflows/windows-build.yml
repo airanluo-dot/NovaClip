@@ -29,7 +29,7 @@ permissions:
 # may supply another permitted URL; ordinary PR builds retain their existing gates.
 env:
   NOVACLIP_INPUT_ACCEPTANCE_URL: ${{ inputs.media_acceptance_url || ((startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'create' && startsWith(github.ref_name, 'publish/v'))) && 'https://www.bilibili.com/video/BV17x411w7KC/') || '' }}
-  NOVACLIP_INPUT_ACCEPTANCE_MULTIPART_URL: ${{ inputs.media_acceptance_multipart_url || '' }}
+  NOVACLIP_INPUT_ACCEPTANCE_MULTIPART_URL: ${{ inputs.media_acceptance_multipart_url || ((startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'create' && startsWith(github.ref_name, 'publish/v'))) && 'https://www.bilibili.com/video/BV1wD4y1o7AS/') || '' }}
 
 jobs:
   build:

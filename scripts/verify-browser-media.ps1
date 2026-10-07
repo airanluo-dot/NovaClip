@@ -53,13 +53,18 @@ try {
     $mediaProbe | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $root "media-acceptance\output-probe.json") -Encoding utf8
     Write-Host ("Real embedded-browser acceptance passed: " + $result.version + "; " + $result.resultCode)
 } finally {
+    $shutdownFailed = $false
     if (-not $process.HasExited) {
         $null = $process.CloseMainWindow()
-        if (-not $process.WaitForExit(10000)) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+        if (-not $process.WaitForExit(10000)) {
+            $shutdownFailed = $true
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
     }
     Remove-Item Env:NOVACLIP_MEDIA_ACCEPTANCE_URL -ErrorAction SilentlyContinue
     Remove-Item Env:NOVACLIP_MEDIA_ACCEPTANCE_MULTIPART_URL -ErrorAction SilentlyContinue
     Remove-Item Env:NOVACLIP_BUILD_COMMIT -ErrorAction SilentlyContinue
     Remove-Item Env:NOVACLIP_ACCEPTANCE_BASELINE -ErrorAction SilentlyContinue
     Remove-Item Env:NOVACLIP_MEDIA_ACCEPTANCE_FFMPEG -ErrorAction SilentlyContinue
+    if ($shutdownFailed) { throw "REAL_MEDIA_ACCEPTANCE_APP_SHUTDOWN_NOT_COMPLETED" }
 }
