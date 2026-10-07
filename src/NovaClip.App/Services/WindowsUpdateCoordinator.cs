@@ -9,6 +9,10 @@ public sealed class WindowsUpdateCoordinator : IDisposable
 {
     private readonly IUpdateService _updateService;
     private readonly WindowsSettingsStore _settings;
+    private readonly string _currentVersion;
+    private readonly bool _isPortableInstall;
+    private readonly Func<CancellationToken, Task> _prepareForUpdate;
+    private readonly Action _requestClose;
     private readonly SemaphoreSlim _applyGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
     private int _disposed;
@@ -17,10 +21,19 @@ public sealed class WindowsUpdateCoordinator : IDisposable
 
     public WindowsUpdateCoordinator(
         IUpdateService updateService,
-        WindowsSettingsStore settings)
+        WindowsSettingsStore settings,
+        string currentVersion,
+        bool isPortableInstall,
+        Func<CancellationToken, Task> prepareForUpdate,
+        Action requestClose)
     {
         _updateService = updateService ?? throw new ArgumentNullException(nameof(updateService));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        ArgumentException.ThrowIfNullOrWhiteSpace(currentVersion);
+        _currentVersion = currentVersion;
+        _isPortableInstall = isPortableInstall;
+        _prepareForUpdate = prepareForUpdate ?? throw new ArgumentNullException(nameof(prepareForUpdate));
+        _requestClose = requestClose ?? throw new ArgumentNullException(nameof(requestClose));
     }
 
     public AppUpdateInfo? LatestUpdate { get; private set; }
@@ -38,7 +51,7 @@ public sealed class WindowsUpdateCoordinator : IDisposable
     {
         using var operation = EnterOperation();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
-        LatestUpdate = await _updateService.CheckForUpdateAsync(AppServices.CurrentVersion, _settings.UpdateChannel, linked.Token).ConfigureAwait(false);
+        LatestUpdate = await _updateService.CheckForUpdateAsync(_currentVersion, _settings.UpdateChannel, linked.Token).ConfigureAwait(false);
         if (Volatile.Read(ref _disposed) == 0 && LatestUpdate is not null)
         {
             try { UpdateAvailable?.Invoke(this, LatestUpdate); }
@@ -70,10 +83,10 @@ public sealed class WindowsUpdateCoordinator : IDisposable
         try
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
-            var usePortable = AppServices.IsPortableInstall;
+            var usePortable = _isPortableInstall;
             var packageType = usePortable ? "portable" : "setup";
             var asset = usePortable ? update.PortableAsset : update.SetupAsset;
-            if (asset is null || !IsExpectedPackageAsset(asset, packageType)) return false;
+            if (asset is null || !UpdatePackagePolicy.IsExpectedAsset(asset, usePortable)) return false;
 
             var updater = Path.Combine(AppContext.BaseDirectory, "NovaClip.Updater.exe");
             if (!File.Exists(updater)) return false;
@@ -119,7 +132,8 @@ public sealed class WindowsUpdateCoordinator : IDisposable
             if (updaterProcess is null) return false;
             try
             {
-                await AppServices.PrepareForUpdateAsync(linked.Token).ConfigureAwait(true);
+                await _prepareForUpdate(linked.Token).ConfigureAwait(false);
+                _requestClose();
                 handedOff = true;
             }
             catch
@@ -128,7 +142,6 @@ public sealed class WindowsUpdateCoordinator : IDisposable
                 catch (InvalidOperationException) { }
                 throw;
             }
-            App.MainWindow?.DispatcherQueue.TryEnqueue(() => App.MainWindow.Close());
             StartupDiagnostics.Info($"Update handoff completed: version={update.Version}, package={packageType}.");
             return true;
         }
@@ -163,29 +176,6 @@ public sealed class WindowsUpdateCoordinator : IDisposable
             // The temporary update directory is safe to retry on the next cleanup sweep.
         }
     }
-
-    private static bool IsExpectedPackageAsset(AppUpdateAsset asset, string packageType)
-    {
-        if (!IsSafeAssetName(asset.Name)) return false;
-        var expectedSuffix = packageType == "portable" ? "-portable.zip" : "-setup.exe";
-        if (!asset.Name.EndsWith(expectedSuffix, StringComparison.OrdinalIgnoreCase)) return false;
-        if (string.IsNullOrWhiteSpace(asset.ContentType)) return true;
-
-        var contentType = asset.ContentType.Trim();
-        return packageType == "portable"
-            ? contentType.Equals("application/zip", StringComparison.OrdinalIgnoreCase) ||
-              contentType.Equals("application/x-zip-compressed", StringComparison.OrdinalIgnoreCase) ||
-              contentType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase)
-            : contentType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase) ||
-              contentType.Equals("application/x-msdownload", StringComparison.OrdinalIgnoreCase) ||
-              contentType.Equals("application/vnd.microsoft.portable-executable", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsSafeAssetName(string name) =>
-        !string.IsNullOrWhiteSpace(name) &&
-        name is not "." and not ".." &&
-        Path.GetFileName(name) == name &&
-        name.IndexOfAny(['/', '\\', '\0']) < 0;
 
     private OperationLease EnterOperation()
     {

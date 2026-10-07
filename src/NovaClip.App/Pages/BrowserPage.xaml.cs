@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using NovaClip.Bilibili;
 using NovaClip.Contracts;
 using NovaClip.Core;
@@ -14,12 +15,18 @@ namespace NovaClip.App.Pages;
 public sealed partial class BrowserPage : Page
 {
     private const int MaxPlayUrlResponseCharacters = 10_000_000;
-    private readonly PlayUrlNormalizer _normalizer = new();
     private readonly BilibiliUrlResolver _urlResolver = new();
     private readonly BrowserNavigationPolicy _policy = new();
     private readonly BrowserHomeService _home = new();
     private readonly LocalizationService _text = new();
-    private readonly MediaDetectionCoordinator _detector = new(Array.Empty<IMediaDetectionStrategy>());
+    private readonly BrowserMediaDetectionSession _mediaSession = new();
+    private MediaDetectionCoordinator _detector => _mediaSession.Detector;
+    private string? _bridgeDocumentId;
+    private bool _snapshotQueued;
+    private MediaDescriptor? _displayedMedia;
+    private MediaDetectionState? _displayedState;
+    private CancellationTokenSource? _settlementCancellation;
+    private bool _closed;
 
     private Uri? _pendingExternalUri;
     private Task? _externalLaunchTask;
@@ -124,6 +131,7 @@ public sealed partial class BrowserPage : Page
             StartupDiagnostics.Info("WebView2.Ready");
             StartupDiagnostics.Info("WebView2.ControlInitializing");
             await BrowserWebView.EnsureCoreWebView2Async(environment);
+            if (_closed) return;
             StartupDiagnostics.Info("WebView2.ControlReady");
 
             var core = BrowserWebView.CoreWebView2;
@@ -199,7 +207,9 @@ public sealed partial class BrowserPage : Page
             return;
         }
 
-        _detector.BeginNavigation(uri);
+        _bridgeDocumentId = null;
+        _mediaSession.BeginNavigation(uri);
+        ScheduleDetectionSettlement();
         SetLoading(true);
         SetDetectionState(MediaDetectionState.WaitingForPageContext);
         StartupDiagnostics.Info("Browser.NavigationStarted");
@@ -211,6 +221,7 @@ public sealed partial class BrowserPage : Page
         if (args.IsSuccess)
         {
             PersistLastPage(sender.Source);
+            _ = ProbePageMediaAsync(sender);
         }
         else if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
         {
@@ -220,7 +231,8 @@ public sealed partial class BrowserPage : Page
 
     private static void PersistLastPage(string? source)
     {
-        if (!AppServices.IsInitialized ||
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NOVACLIP_MEDIA_ACCEPTANCE_URL")) ||
+            !AppServices.IsInitialized ||
             !Uri.TryCreate(source, UriKind.Absolute, out var uri) ||
             !BrowserNavigationPolicy.IsBilibiliHost(uri.Host) ||
             uri.Scheme is not ("http" or "https") ||
@@ -240,58 +252,138 @@ public sealed partial class BrowserPage : Page
         }
     }
 
-    private void Core_SourceChanged(CoreWebView2 sender, CoreWebView2SourceChangedEventArgs args) =>
-        DispatcherQueue.TryEnqueue(() => AddressBox.Text = sender.Source);
+    private void Core_SourceChanged(CoreWebView2 sender, CoreWebView2SourceChangedEventArgs args)
+    {
+        if (_closed) return;
+        if (AddressBox.Text != sender.Source) AddressBox.Text = sender.Source;
+        if (!Uri.TryCreate(sender.Source, UriKind.Absolute, out var uri) ||
+            !BrowserNavigationPolicy.IsBilibiliHost(uri.Host)) return;
+        var previousGeneration = _detector.Snapshot.Page?.NavigationGeneration;
+        var generation = _mediaSession.UpdatePageContext(new PageIdentity(sender.Source, null, null, null, null, 0));
+        if (generation != previousGeneration) ScheduleDetectionSettlement();
+    }
 
     private void Core_HistoryChanged(CoreWebView2 sender, object args) =>
-        DispatcherQueue.TryEnqueue(() =>
+        UpdateHistoryButtons(sender);
+
+    private void UpdateHistoryButtons(CoreWebView2 sender)
+    {
+        if (!_closed)
         {
             BackButton.IsEnabled = sender.CanGoBack;
             ForwardButton.IsEnabled = sender.CanGoForward;
-        });
+        }
+    }
 
     private void Core_DocumentTitleChanged(CoreWebView2 sender, object args) =>
-        StartupDiagnostics.Info("Browser.DocumentTitleChanged");
+        StartupDiagnostics.Debug("Browser.DocumentTitleChanged");
 
     private void Core_ProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs args) =>
         DispatcherQueue.TryEnqueue(() => ShowWebViewFailure(args.ProcessFailedKind.ToString()));
 
     private void Detector_StateChanged(object? sender, MediaDetectionSnapshot snapshot)
     {
-        DispatcherQueue.TryEnqueue(() =>
+        lock (_mediaSession)
         {
-            var currentGeneration = _detector.Snapshot.Page?.NavigationGeneration ?? 0;
-            var snapshotGeneration = snapshot.Page?.NavigationGeneration ?? 0;
-            if (snapshotGeneration != 0 && currentGeneration != 0 && snapshotGeneration < currentGeneration) return;
-            ApplyDetectionSnapshot(snapshot);
-        });
-    }
-
-    private void Core_WebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
-    {
-        if (!BilibiliBridgeMessageParser.TryParse(args.WebMessageAsJson, out var message) ||
-            message is null ||
-            message.Type != BilibiliBridgeMessageType.PageContextChanged ||
-            !BilibiliBridgeMessageParser.TryReadPageContext(message, out var context) ||
-            context is null ||
-            !IsCurrentPageContext(context.Url))
-        {
-            return;
+            if (_snapshotQueued || _closed) return;
+            _snapshotQueued = true;
         }
 
-        var page = new PageIdentity(
-            context.Url,
-            context.Bvid,
-            context.Aid,
-            context.Cid,
-            context.EpisodeId,
-            0,
-            context.Title,
-            context.EpisodeTitle,
-            context.Kind.Equals("bangumi", StringComparison.OrdinalIgnoreCase));
-        _detector.UpdatePageContext(page);
-        StartupDiagnostics.Info("MediaDetection.PageContextAccepted");
+        if (!DispatcherQueue.TryEnqueue(() =>
+            {
+                lock (_mediaSession)
+                {
+                    _snapshotQueued = false;
+                }
+                // Render the latest authoritative state, including resets. A queued
+                // intermediate candidate or older result cannot overwrite a newer one.
+                if (!_closed) ApplyDetectionSnapshot(_detector.Snapshot);
+            }))
+        {
+            lock (_mediaSession) _snapshotQueued = false;
+        }
     }
+
+    private async void Core_WebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        if (_closed || !IsCurrentPageContext(args.Source)) return;
+        var generation = _detector.Snapshot.Page?.NavigationGeneration ?? 0;
+        var json = args.WebMessageAsJson;
+        if (json.Length > 2_000_000) return;
+        try
+        {
+            // Context messages are small; playback payload parsing and cloning can
+            // be large, so it runs on a worker. WebView APIs remain on this thread.
+            BilibiliBridgeMessage? message;
+            if (json.Length < 16_000) message = ParseBridgeMessage(json);
+            else
+            {
+                using var parseLease = _mediaSession.TryBeginObservation(generation, isPageData: true);
+                if (parseLease is null) return;
+                message = await Task.Run(() => ParseBridgeMessage(json), parseLease.CancellationToken);
+            }
+            if (_closed || message is null || _detector.Snapshot.Page?.NavigationGeneration != generation) return;
+            if (message.Type == BilibiliBridgeMessageType.BridgeReady)
+            {
+                if (ReadString(message.Payload, "url") is { } url && IsCurrentPageContext(url))
+                    await ProbePageMediaAsync(sender);
+                return;
+            }
+
+            if (_bridgeDocumentId is null ||
+                !string.Equals(ReadString(message.Payload, "documentId"), _bridgeDocumentId, StringComparison.Ordinal) ||
+                !BilibiliBridgeMessageParser.TryReadPageContext(message, out var context) ||
+                context is null || !IsCurrentPageContext(context.Url)) return;
+
+            var page = new PageIdentity(context.Url, context.Bvid, context.Aid, context.Cid,
+                context.EpisodeId, generation, context.Title, context.EpisodeTitle,
+                context.Kind.Equals("bangumi", StringComparison.OrdinalIgnoreCase), context.Page);
+            var updatedGeneration = _mediaSession.UpdatePageContext(page);
+            page = page with { NavigationGeneration = updatedGeneration };
+            if (updatedGeneration != generation) ScheduleDetectionSettlement();
+
+            if (message.Type == BilibiliBridgeMessageType.DetectionCompleted)
+            {
+                if (ReadString(message.Payload, "errorCode") is { Length: > 0 } errorCode)
+                    _detector.FailObservation(updatedGeneration, errorCode,
+                        errorCode is "RESOLVE_LOGIN_REQUIRED" or "RESOLVE_VIP_REQUIRED"
+                            ? MediaDetectionState.PermissionDenied : MediaDetectionState.Error);
+                else _detector.CompleteObservation(updatedGeneration);
+                return;
+            }
+            if (message.Type != BilibiliBridgeMessageType.HydrateDataFound ||
+                !message.Payload.TryGetProperty("playUrl", out var playUrl) ||
+                playUrl.ValueKind != JsonValueKind.Object) return;
+
+            using var lease = _mediaSession.TryBeginObservation(updatedGeneration, isPageData: true);
+            if (lease is null) return;
+            await Task.Run(async () =>
+            {
+                lease.CancellationToken.ThrowIfCancellationRequested();
+                var playUrlJson = playUrl.GetRawText();
+                if (ReadString(message.Payload, "endpoint") is { } endpoint &&
+                    Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri))
+                    await _detector.ObserveAsync(new PlayUrlObservation(endpointUri, playUrlJson,
+                        lease.Generation, DateTimeOffset.UtcNow), lease.CancellationToken);
+                else
+                    await _detector.ObservePageDataAsync(playUrlJson, page, lease.Generation, lease.CancellationToken);
+            }, lease.CancellationToken);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception)
+        {
+            _detector.FailObservation(_detector.Snapshot.Page?.NavigationGeneration == generation ? generation : -1,
+                "MEDIA_BRIDGE_FAILED");
+            StartupDiagnostics.Warning("MEDIA_BRIDGE_FAILED", exception);
+        }
+    }
+
+    private static BilibiliBridgeMessage? ParseBridgeMessage(string json) =>
+        BilibiliBridgeMessageParser.TryParse(json, out var message) ? message : null;
+
+    private static string? ReadString(JsonElement payload, string name) =>
+        payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty(name, out var value) &&
+        value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     private async void Core_WebResourceResponseReceived(
         CoreWebView2 sender,
@@ -304,51 +396,31 @@ public sealed partial class BrowserPage : Page
             return;
         }
 
+        if (_closed) return;
         var page = _detector.Snapshot.Page;
         var generation = page?.NavigationGeneration ?? 0;
         if (page is null || generation == 0) return;
 
+        using var lease = _mediaSession.TryBeginObservation(generation);
+        if (lease is null) return;
         try
         {
-            using var stream = await args.Response.GetContentAsync();
+            using var stream = await AwaitResponseContentAsync(args.Response.GetContentAsync().AsTask(), lease.CancellationToken);
             if (stream is null) return;
-
-            var json = await ReadBoundedTextAsync(stream.AsStreamForRead(), MaxPlayUrlResponseCharacters);
-            if (json is null) return;
-            if (_detector.Snapshot.Page?.NavigationGeneration != generation) return;
-
-            page = _detector.Snapshot.Page;
-            if (page is null || page.NavigationGeneration != generation) return;
-
-            var context = new PlayUrlContext(
-                page.PageUrl,
-                page.Title ?? _text.GetString("Browser_DefaultMediaTitle"),
-                page.Bvid,
-                page.Aid,
-                page.Cid,
-                page.EpisodeId,
-                page.EpisodeTitle,
-                page.IsBangumi,
-                ResolverStrategy.PlayUrlResponse);
-            var result = _normalizer.Normalize(json, context);
-            var media = result.Media;
-            var track = media?.VideoTrack ?? media?.AudioTrack;
-            var fingerprint = new MediaFingerprint(
-                page.PageUrl,
-                page.Bvid,
-                page.Aid,
-                page.Cid,
-                page.EpisodeId,
-                track?.QualityId,
-                track?.Codec,
-                generation);
-            var detectionResult = new MediaDetectionResult(
-                result.IsSuccess,
-                result.IsSuccess ? MediaDetectionState.Ready : MediaDetectionState.Error,
-                fingerprint,
-                media,
-                result.Error?.Code);
-            _detector.TryAcceptResult(generation, detectionResult);
+            // GetContentAsync is a WebView call. Reading/normalizing its stream is
+            // CPU and I/O work and must not resume on the WinUI synchronization context.
+            await Task.Run(async () =>
+            {
+                var json = await ReadBoundedTextAsync(stream.AsStreamForRead(), MaxPlayUrlResponseCharacters,
+                    lease.CancellationToken).ConfigureAwait(false);
+                if (json is null)
+                {
+                    _detector.FailObservation(generation, "MEDIA_RESPONSE_TOO_LARGE");
+                    return;
+                }
+                await _detector.ObserveAsync(new PlayUrlObservation(responseUri, json, generation,
+                    DateTimeOffset.UtcNow), lease.CancellationToken).ConfigureAwait(false);
+            }, lease.CancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -356,22 +428,37 @@ public sealed partial class BrowserPage : Page
         }
         catch (Exception exception)
         {
-            if (_detector.Snapshot.Page?.NavigationGeneration == generation)
+            if (!_closed && _detector.Snapshot.Page?.NavigationGeneration == generation)
             {
-                ShowError("MEDIA_PLAYURL_READ_FAILED", exception.Message);
+                _detector.FailObservation(generation, "MEDIA_PLAYURL_READ_FAILED");
+                StartupDiagnostics.Warning("MEDIA_PLAYURL_READ_FAILED", exception);
             }
         }
     }
 
     private void ApplyDetectionSnapshot(MediaDetectionSnapshot snapshot)
     {
-        SetDetectionState(snapshot.State);
+        if (_displayedState != snapshot.State)
+        {
+            _displayedState = snapshot.State;
+            SetDetectionState(snapshot.State);
+            // No URLs or request credentials enter diagnostics. State/identity are
+            // enough to determine where navigation results were discarded.
+            StartupDiagnostics.Info($"MediaDetection.State:{snapshot.State};generation:{snapshot.Page?.NavigationGeneration};cid:{snapshot.Page?.Cid};code:{snapshot.ErrorCode}");
+        }
         if (snapshot.Media is not MediaDescriptor media)
         {
+            _displayedMedia = null;
             AddDownloadButton.IsEnabled = false;
             if (snapshot.State != MediaDetectionState.Ready) QualityCombo.Items.Clear();
             return;
         }
+        if (ReferenceEquals(_displayedMedia, media)) return;
+        var previousTracks = _displayedMedia?.Tracks.Where(track => track.Type == TrackType.Video).ToArray();
+        var previousSelection = _displayedMedia?.Cid == media.Cid && previousTracks is not null &&
+            QualityCombo.SelectedIndex >= 0 && QualityCombo.SelectedIndex < previousTracks.Length
+                ? previousTracks[QualityCombo.SelectedIndex] : null;
+        _displayedMedia = media;
 
         var videoTracks = media.Tracks.Where(track => track.Type == TrackType.Video).ToList();
         QualityCombo.Items.Clear();
@@ -383,7 +470,10 @@ public sealed partial class BrowserPage : Page
                 FormatBytes(track.Size));
         }
 
-        if (videoTracks.Count > 0 && SelectVideoTrack(videoTracks) is { } preferred)
+        var preferred = previousSelection is null ? null : videoTracks.FirstOrDefault(track =>
+            track.QualityId == previousSelection.QualityId && track.Codec == previousSelection.Codec);
+        preferred ??= SelectVideoTrack(videoTracks);
+        if (preferred is not null)
         {
             QualityCombo.SelectedIndex = videoTracks.IndexOf(preferred);
         }
@@ -420,7 +510,12 @@ public sealed partial class BrowserPage : Page
             return filtered.OrderByDescending(track => track.QualityId ?? 0).First();
         }
 
-        if (int.TryParse(quality.TrimEnd('P', 'p'), out var requested))
+        var requested = quality.ToUpperInvariant() switch
+        {
+            "1080P" => 80, "720P" => 64, "480P" => 32, "360P" => 16,
+            _ => int.TryParse(quality, CultureInfo.InvariantCulture, out var id) ? id : 0
+        };
+        if (requested > 0)
         {
             return filtered.OrderBy(track =>
                 Math.Abs((track.QualityId ?? 0) - requested)).First();
@@ -431,21 +526,37 @@ public sealed partial class BrowserPage : Page
 
     private async void AddDownloadButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_detector.Snapshot.Media is not MediaDescriptor media) return;
+        AddDownloadButton.IsEnabled = false;
+        try
+        {
+            if (await EnqueueCurrentMediaAsync() is not null) ShowInfo(_text.GetString("Download_Queued"));
+        }
+        catch (FfmpegUnavailableException exception) { ShowError("DOWNLOAD_FFMPEG_REQUIRED", exception.Message); }
+        catch (Exception exception) { ShowError("DOWNLOAD_CREATE_FAILED", exception.Message); }
+        finally { ApplyDownloadButtonState(); }
+    }
+
+    internal async Task<Guid?> EnqueueCurrentMediaAsync()
+    {
+        var snapshot = _detector.Snapshot;
+        if (snapshot.State != MediaDetectionState.Ready || snapshot.Media is not MediaDescriptor media ||
+            !ReferenceEquals(_displayedMedia, media)) return null;
 
         var videoTracks = media.Tracks.Where(track => track.Type == TrackType.Video).ToList();
         var video = videoTracks.Count == 0
             ? null
             : videoTracks[Math.Clamp(QualityCombo.SelectedIndex, 0, videoTracks.Count - 1)];
         var audio = media.Tracks.FirstOrDefault(track => track.Type == TrackType.Audio);
-        if (video is null && audio is null && media.LegacySegments.Count == 0) return;
+        if (video is null && audio is null && media.LegacySegments.Count == 0) return null;
 
-        try
-        {
             var title = AppServices.FileNames.Sanitize(media.Title, "Bilibili");
             var extension = video is null && audio is not null ? ".m4a" : ".mp4";
             var requestHeaders = await BrowserMediaRequestHeadersFactory.CreateAsync(BrowserWebView.CoreWebView2, media.PageUrl);
-            await AppServices.Downloads.EnqueueAsync(new DownloadRequest(
+            // Cookie/UA collection awaits WebView. A switch during that await must
+            // not silently queue the old card with the new page's session context.
+            if (_closed || _detector.Snapshot.Page?.NavigationGeneration != snapshot.Page?.NavigationGeneration ||
+                !ReferenceEquals(_detector.Snapshot.Media, media)) return null;
+            return await AppServices.Downloads.EnqueueAsync(new DownloadRequest(
                 Guid.NewGuid(),
                 media,
                 video,
@@ -456,13 +567,10 @@ public sealed partial class BrowserPage : Page
                 AppServices.Settings.MergeAfterDownload,
                 AppServices.Settings.DeleteTemporaryFilesAfterMerge,
                 requestHeaders));
-            ShowInfo(_text.GetString("Download_Queued"));
-        }
-        catch (Exception exception)
-        {
-            ShowError("DOWNLOAD_CREATE_FAILED", exception.Message);
-        }
     }
+
+    private void ApplyDownloadButtonState() => AddDownloadButton.IsEnabled = !_closed &&
+        _detector.Snapshot.State == MediaDetectionState.Ready && _detector.Snapshot.Media is MediaDescriptor;
 
     private void AddressBox_KeyDown(object sender, KeyRoutedEventArgs e)
     {
@@ -535,6 +643,8 @@ public sealed partial class BrowserPage : Page
             MediaDetectionState.Resolving or MediaDetectionState.Observing => "Detection_Observing",
             MediaDetectionState.PermissionDenied => "Detection_PermissionDenied",
             MediaDetectionState.Error => "Detection_Error",
+            MediaDetectionState.WaitingForPageContext => "Detection_Waiting",
+            MediaDetectionState.Expired => "Detection_Expired",
             _ => "Detection_Empty"
         });
         MediaDetails.Visibility = state == MediaDetectionState.Ready
@@ -566,7 +676,8 @@ public sealed partial class BrowserPage : Page
     {
         _webViewRecoveryRequested = false;
         BrowserInfoBar.Severity = InfoBarSeverity.Error;
-        BrowserInfoBar.Message = _text.Format("Error_WithCode", code);
+        BrowserInfoBar.Message = code == "DOWNLOAD_FFMPEG_REQUIRED"
+            ? _text.GetString("Download_FfmpegRequired") : _text.Format("Error_WithCode", code);
         BrowserInfoBar.IsOpen = true;
         InfoActionButton.Visibility = Visibility.Collapsed;
         StartupDiagnostics.Warning(code + ": " + detail);
@@ -621,8 +732,13 @@ public sealed partial class BrowserPage : Page
 
     public void ResetDetector()
     {
-        _detector.Reset();
-        SetDetectionState(MediaDetectionState.Observing);
+        _mediaSession.Reset();
+        if (Uri.TryCreate(BrowserWebView.CoreWebView2?.Source, UriKind.Absolute, out var source))
+        {
+            _mediaSession.BeginNavigation(source);
+            ScheduleDetectionSettlement();
+            _ = ProbePageMediaAsync(BrowserWebView.CoreWebView2!);
+        }
         StartupDiagnostics.Info("MediaDetection.Reset");
     }
 
@@ -664,22 +780,137 @@ public sealed partial class BrowserPage : Page
         return BrowserNavigationPolicy.IsBilibiliHost(contextUri.Host) &&
             contextUri.Scheme.Equals(currentUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
             contextUri.Host.Equals(currentUri.Host, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(contextUri.AbsolutePath, currentUri.AbsolutePath, StringComparison.OrdinalIgnoreCase);
+            string.Equals(contextUri.AbsolutePath, currentUri.AbsolutePath, StringComparison.Ordinal) &&
+            string.Equals(PagePart(contextUri), PagePart(currentUri), StringComparison.Ordinal);
     }
 
-    private static async Task<string?> ReadBoundedTextAsync(Stream stream, int maxCharacters)
+    private static string PagePart(Uri uri)
+    {
+        foreach (var item in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = item.Split('=', 2);
+            if (pair[0].Equals("p", StringComparison.OrdinalIgnoreCase) && pair.Length == 2 &&
+                int.TryParse(pair[1], CultureInfo.InvariantCulture, out var part) && part > 0)
+                return part.ToString(CultureInfo.InvariantCulture);
+        }
+        return "1";
+    }
+
+    private static async Task<string?> ReadBoundedTextAsync(Stream stream, int maxCharacters, CancellationToken cancellationToken)
     {
         using var reader = new StreamReader(stream);
         var builder = new StringBuilder(Math.Min(maxCharacters, 128 * 1024));
         var buffer = new char[8192];
         int read;
-        while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
+        while ((read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
         {
             if (builder.Length > maxCharacters - read) return null;
             builder.Append(buffer, 0, read);
         }
 
         return builder.ToString();
+    }
+
+    private async Task ProbePageMediaAsync(CoreWebView2 core)
+    {
+        var generation = _detector.Snapshot.Page?.NavigationGeneration;
+        try
+        {
+            if (_closed) return;
+            var documentJson = await core.ExecuteScriptAsync("window.__novaClipDocumentId || null;");
+            var documentId = JsonSerializer.Deserialize<string>(documentJson);
+            if (_closed || generation != _detector.Snapshot.Page?.NavigationGeneration || documentId is null) return;
+            _bridgeDocumentId = documentId;
+            await core.ExecuteScriptAsync("window.__novaClipProbeMedia && window.__novaClipProbeMedia(); void 0;");
+        }
+        catch (Exception exception)
+        {
+            if (!_closed && generation == _detector.Snapshot.Page?.NavigationGeneration)
+                StartupDiagnostics.Warning("MEDIA_PAGE_PROBE_FAILED", exception);
+        }
+    }
+
+    private static async Task<T> AwaitResponseContentAsync<T>(Task<T> contentTask, CancellationToken cancellationToken)
+        where T : IDisposable
+    {
+        try { return await contentTask.WaitAsync(cancellationToken); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // WebView's COM read may finish after navigation cancellation. Release
+            // our bounded reader immediately and dispose a late stream when it arrives.
+            _ = DisposeLateResponseAsync(contentTask);
+            throw;
+        }
+    }
+
+    private static async Task DisposeLateResponseAsync<T>(Task<T> contentTask) where T : IDisposable
+    {
+        try { (await contentTask.ConfigureAwait(false))?.Dispose(); }
+        catch (Exception exception) { StartupDiagnostics.Debug("MediaDetection.RetiredResponse:" + exception.GetType().Name); }
+    }
+
+    private void ScheduleDetectionSettlement()
+    {
+        _settlementCancellation?.Cancel();
+        _settlementCancellation?.Dispose();
+        _settlementCancellation = new CancellationTokenSource();
+        _ = SettleDetectionAsync(_detector.Snapshot.Page?.NavigationGeneration ?? 0, _settlementCancellation.Token);
+    }
+
+    private async Task SettleDetectionAsync(long generation, CancellationToken cancellationToken)
+    {
+        try
+        {
+            // One deadline bounds the observation window; this does not poll or
+            // issue requests. Bridge events can still recover a later successful play.
+            await Task.Delay(TimeSpan.FromSeconds(12), cancellationToken);
+            if (_closed || _detector.Snapshot.Page?.NavigationGeneration != generation) return;
+            _detector.CompleteObservation(generation);
+            if (_detector.Snapshot.State == MediaDetectionState.WaitingForPageContext)
+                _detector.FailObservation(generation, "MEDIA_PAGE_CONTEXT_TIMEOUT");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+    }
+
+    internal MediaDetectionSnapshot AcceptanceSnapshot => _detector.Snapshot;
+    internal bool IsPageBridgeReady => _bridgeDocumentId is not null;
+    internal bool IsMediaCardReady => AddDownloadButton.IsEnabled && MediaDetails.Visibility == Visibility.Visible &&
+        ReferenceEquals(_displayedMedia, _detector.Snapshot.Media);
+    internal void SelectLowestAcceptanceQuality()
+    {
+        if (_detector.Snapshot.Media is not MediaDescriptor media) return;
+        var tracks = media.Tracks.Where(track => track.Type == TrackType.Video).ToList();
+        if (tracks.Count == 0) return;
+        var lowest = tracks.OrderBy(track => track.QualityId ?? 0)
+            .ThenBy(track => track.Size ?? long.MaxValue).First();
+        QualityCombo.SelectedIndex = tracks.IndexOf(lowest);
+    }
+    internal Task<string> ExecuteAcceptanceScriptAsync(string script) =>
+        BrowserWebView.CoreWebView2 is { } core ? core.ExecuteScriptAsync(script).AsTask() : Task.FromResult("null");
+
+    internal void CloseBrowser()
+    {
+        if (_closed) return;
+        _closed = true;
+        _settlementCancellation?.Cancel();
+        _settlementCancellation?.Dispose();
+        _detector.StateChanged -= Detector_StateChanged;
+        _mediaSession.Dispose();
+        if (BrowserWebView.CoreWebView2 is { } core)
+        {
+            core.NewWindowRequested -= Core_NewWindowRequested;
+            core.NavigationStarting -= Core_NavigationStarting;
+            core.NavigationCompleted -= Core_NavigationCompleted;
+            core.SourceChanged -= Core_SourceChanged;
+            core.HistoryChanged -= Core_HistoryChanged;
+            core.DocumentTitleChanged -= Core_DocumentTitleChanged;
+            core.ProcessFailed -= Core_ProcessFailed;
+            core.WebMessageReceived -= Core_WebMessageReceived;
+            core.WebResourceResponseReceived -= Core_WebResourceResponseReceived;
+        }
+        BrowserWebView.Close();
+        if (ReferenceEquals(Instance, this)) Instance = null;
+        if (ReferenceEquals(Current, this)) Current = null;
     }
 
     private static string QualityName(int? id) => id switch

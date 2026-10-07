@@ -2,7 +2,9 @@
 
 NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 WinUI 3 + WebView2 打开 B 站真实页面，使用原生 C# 下载引擎将 DASH 音视频流式写入磁盘，并调用本机 FFmpeg 进行无损 remux。
 
-当前版本：**1.0.0-beta.8 — 原生界面与多连接下载**
+当前开发版本：**1.0.0-beta.9 — 内置浏览器媒体识别与生命周期修复候选版**
+
+公开测试版以 [GitHub Releases](https://github.com/airanluo-dot/NovaClip/releases) 为准；候选版必须完成 Windows 实际播放与下载验收后才能发布。
 
 > 应用只处理用户在 B 站账号下有权正常播放的内容，不实现 DRM 解密、会员权限绕过、Cookie 窃取或访问控制规避。
 
@@ -20,7 +22,7 @@ NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 
 
 - Windows 10 1809（10.0.17763）或更高版本，x64。
 - Microsoft Edge WebView2 Evergreen Runtime。
-- DASH 音视频合并需要 FFmpeg：在设置中指定 `ffmpeg.exe`，或放入 `tools/ffmpeg/win-x64/`，也可以加入系统 PATH。NovaClip 会在开始 DASH 任务前明确提示缺失 FFmpeg，而不是下载完成后静默失败。
+- DASH 音视频合并及 DURL 容器 remux 需要 FFmpeg：在设置中指定 `ffmpeg.exe`，或放入 `tools/ffmpeg/win-x64/`，也可以加入系统 PATH。NovaClip 会在开始需要合并／remux 的任务前明确提示缺失 FFmpeg，而不是下载完成后静默失败。
 
 ## 使用方式
 
@@ -36,7 +38,7 @@ NovaClip 是一个面向 Windows 的 Bilibili 原生下载管理器。它使用 
 
 - 安装版下载 `*-setup.exe`，退出应用后由更新器使用同一个安装目录覆盖更新。
 - 便携版下载 `*-portable.zip`，由更新器等待应用退出后替换文件并自动重启。
-- Release 必须同时提供 `novaclip-update-manifest.json` 和 `.sig`。GitHub `digest` 与签名清单中的 SHA-256/大小必须全部匹配；缺少任一项都会拒绝更新。
+- Release 资产必须提供有效 GitHub `sha256:` digest；更新包必须与资产声明的 SHA-256、大小、名称和类型匹配。便携包另验证内部文件清单，不使用未实现的签名清单流程。
 
 普通更新检查不需要 GitHub 令牌。私有仓库开发测试只接受进程环境变量 `NOVACLIP_GITHUB_TOKEN`，不会写入设置或日志。
 

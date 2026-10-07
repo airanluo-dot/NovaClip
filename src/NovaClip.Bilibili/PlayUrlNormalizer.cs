@@ -22,6 +22,8 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
             {
                 return ResolveResult.Failure(new AppError("RESOLVE_INVALID_RESPONSE", "B 站返回的数据格式暂时无法识别。", "PlayURL response root was not an object.", true, "刷新页面后重试"));
             }
+            if (IdentityConflicts(root, context)) return IdentityMismatch();
+            var identity = AddIdentityEvidence(context, root);
             var code = GetInt64(root, "code") ?? 0;
             if (code != 0)
             {
@@ -33,7 +35,20 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
             {
                 return ResolveResult.Failure(new AppError("RESOLVE_PLAYURL_NOT_FOUND", "没有找到可用的播放信息。", "PlayURL response did not contain data.", true, "刷新页面后重试"));
             }
+            if (IdentityConflicts(data, identity)) return IdentityMismatch();
+            identity = AddIdentityEvidence(identity, data);
+            var drmProtected = HasDrmMarker(root) || HasDrmMarker(data);
             if (data.TryGetProperty("video_info", out var videoInfo)) data = videoInfo;
+            if (data.ValueKind != JsonValueKind.Object)
+                return ResolveResult.Failure(new AppError("RESOLVE_INVALID_RESPONSE", "B 站返回的数据格式暂时无法识别。", "PlayURL video_info was not an object.", true));
+
+            // Preserve the observed request's identity as evidence; do not let a
+            // mismatched body silently inherit the current browser's BV/CID.
+            if (IdentityConflicts(data, identity)) return IdentityMismatch();
+            identity = AddIdentityEvidence(identity, data);
+
+            if (drmProtected || HasDrmMarker(data) || HasProtectedTracks(data))
+                return ResolveResult.Failure(new AppError("RESOLVE_DRM_UNSUPPORTED", "当前视频使用 DRM 保护，暂不支持下载。", "PlayURL explicitly marked the media as DRM protected.", false, "请在 B 站播放器中观看"));
 
             var qualities = ParseQualityOptions(data);
             var codecs = ParseCodecOptions(data);
@@ -63,10 +78,10 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
             {
                 Title = context.Title,
                 PageUrl = context.PageUrl,
-                Bvid = context.Bvid ?? GetString(data, "bvid"),
-                Aid = context.Aid ?? GetInt64(data, "avid") ?? GetInt64(data, "aid"),
-                Cid = context.Cid ?? GetInt64(data, "cid"),
-                EpisodeId = context.EpisodeId ?? GetInt64(data, "ep_id") ?? GetInt64(data, "episode_id"),
+                Bvid = identity.Bvid,
+                Aid = identity.Aid,
+                Cid = identity.Cid,
+                EpisodeId = identity.EpisodeId,
                 EpisodeTitle = context.EpisodeTitle,
                 IsBangumi = context.IsBangumi,
                 Source = context.Source,
@@ -95,6 +110,9 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
     {
         if (root.TryGetProperty("data", out var data)) return data;
         if (root.TryGetProperty("result", out var result)) return result;
+        // window.__playinfo__ and hydrate player data also expose the PlayURL
+        // object directly rather than inside a network response envelope.
+        if (root.TryGetProperty("dash", out _) || root.TryGetProperty("durl", out _) || root.TryGetProperty("video_info", out _)) return root;
         return default;
     }
 
@@ -146,7 +164,7 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
 
     private static QualityOption[] ParseQualityOptions(JsonElement data)
     {
-        var ids = data.TryGetProperty("accept_quality", out var quality) && quality.ValueKind == JsonValueKind.Array ? quality.EnumerateArray().Where(item => item.TryGetInt32(out _)).Select(item => item.GetInt32()).ToArray() : [];
+        var ids = data.TryGetProperty("accept_quality", out var quality) && quality.ValueKind == JsonValueKind.Array ? quality.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out _)).Select(item => item.GetInt32()).ToArray() : [];
         var descriptions = data.TryGetProperty("accept_description", out var description) && description.ValueKind == JsonValueKind.Array ? description.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() ?? "未知清晰度" : "未知清晰度").ToArray() : [];
         if (data.TryGetProperty("support_formats", out var formats) && formats.ValueKind == JsonValueKind.Array)
         {
@@ -170,7 +188,7 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
 
     private static AppError ToError(long code, string? message) => code switch
     {
-        -10403 => new AppError("RESOLVE_VIP_REQUIRED", "此视频需要拥有相应权限的账号才能播放。", message ?? "VIP or permission required.", false, "请在 B 站确认账号有权播放该内容"),
+        -10403 or -403 or 6002003 => new AppError("RESOLVE_VIP_REQUIRED", "此视频需要拥有相应权限的账号才能播放。", "Account or content permission required.", false, "请在 B 站确认账号有权播放该内容"),
         -101 => new AppError("RESOLVE_LOGIN_REQUIRED", "请先在 B 站登录。", message ?? "Login required.", true, "在浏览器页登录 B 站"),
         _ => new AppError("RESOLVE_PLAYURL_ERROR", message ?? "B 站暂时无法提供播放信息。", $"Bilibili returned code {code}.", code >= 500, "刷新页面后重试")
     };
@@ -188,6 +206,48 @@ public sealed class PlayUrlNormalizer : IPlayUrlNormalizer
     };
 
     private static string? CodecName(int? id) => id switch { 7 => "AVC", 12 => "HEVC", 13 => "AV1", _ => null };
+    private static bool IdentityConflicts(JsonElement data, PlayUrlContext context) =>
+        Conflicts(context.Bvid, GetString(data, "bvid")) ||
+        Conflicts(context.Aid, GetInt64(data, "avid") ?? GetInt64(data, "aid")) ||
+        Conflicts(context.Cid, GetInt64(data, "cid")) ||
+        Conflicts(context.EpisodeId, GetInt64(data, "ep_id") ?? GetInt64(data, "episode_id"));
+
+    private static PlayUrlContext AddIdentityEvidence(PlayUrlContext context, JsonElement data) => context with
+    {
+        Bvid = context.Bvid ?? GetString(data, "bvid"),
+        Aid = context.Aid ?? GetInt64(data, "avid") ?? GetInt64(data, "aid"),
+        Cid = context.Cid ?? GetInt64(data, "cid"),
+        EpisodeId = context.EpisodeId ?? GetInt64(data, "ep_id") ?? GetInt64(data, "episode_id")
+    };
+
+    private static ResolveResult IdentityMismatch() => ResolveResult.Failure(new AppError("RESOLVE_IDENTITY_MISMATCH",
+        "播放信息与当前视频不一致。", "Observed request and response content identities conflicted.", true, "刷新页面后重试"));
+
+    private static bool HasDrmMarker(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object) return false;
+        if (GetInt64(value, "drm_tech_type") is > 0) return true;
+        if (!value.TryGetProperty("is_drm", out var marker)) return false;
+        return marker.ValueKind == JsonValueKind.True ||
+            marker.ValueKind == JsonValueKind.Number && marker.TryGetInt64(out var number) && number > 0 ||
+            marker.ValueKind == JsonValueKind.String &&
+                (bool.TryParse(marker.GetString(), out var enabled) && enabled || GetInt64(value, "is_drm") is > 0);
+    }
+
+    private static bool HasProtectedTracks(JsonElement data)
+    {
+        if (data.TryGetProperty("dash", out var dash) && dash.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var type in new[] { "video", "audio" })
+                if (dash.TryGetProperty(type, out var tracks) && tracks.ValueKind == JsonValueKind.Array &&
+                    tracks.EnumerateArray().Any(HasDrmMarker)) return true;
+        }
+        return data.TryGetProperty("durl", out var segments) && segments.ValueKind == JsonValueKind.Array &&
+            segments.EnumerateArray().Any(HasDrmMarker);
+    }
+
+    private static bool Conflicts(string? expected, string? actual) => expected is not null && actual is not null && !BilibiliMediaIdentity.SameBvid(expected, actual);
+    private static bool Conflicts(long? expected, long? actual) => expected.HasValue && actual.HasValue && expected != actual;
     private static bool TryCreateMediaCandidate(string? value, out MediaUrlCandidate candidate)
     {
         candidate = null!;

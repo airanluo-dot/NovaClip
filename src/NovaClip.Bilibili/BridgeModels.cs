@@ -9,6 +9,7 @@ public enum BilibiliBridgeMessageType
     PageContextChanged,
     PlayerQualityChanged,
     HydrateDataFound,
+    DetectionCompleted,
     BridgeError
 }
 
@@ -45,6 +46,7 @@ public static class BilibiliBridgeMessageParser
                 "pageContextChanged" => BilibiliBridgeMessageType.PageContextChanged,
                 "playerQualityChanged" => BilibiliBridgeMessageType.PlayerQualityChanged,
                 "hydrateDataFound" => BilibiliBridgeMessageType.HydrateDataFound,
+                "detectionCompleted" => BilibiliBridgeMessageType.DetectionCompleted,
                 "bridgeError" => BilibiliBridgeMessageType.BridgeError,
                 _ => BilibiliBridgeMessageType.Unknown
             };
@@ -69,7 +71,7 @@ public static class BilibiliBridgeMessageParser
     public static bool TryReadPageContext(BilibiliBridgeMessage message, out BilibiliPageContext? context)
     {
         context = null;
-        if (message is null || message.Type != BilibiliBridgeMessageType.PageContextChanged) return false;
+        if (message is null || message.Type is not (BilibiliBridgeMessageType.PageContextChanged or BilibiliBridgeMessageType.HydrateDataFound or BilibiliBridgeMessageType.DetectionCompleted)) return false;
         var payload = message.Payload;
         if (payload.ValueKind != JsonValueKind.Object ||
             !payload.TryGetProperty("url", out var urlProperty) ||

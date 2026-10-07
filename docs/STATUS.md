@@ -1,21 +1,7 @@
-# Status — 1.0.0-beta.7 Remediation and Safety Baseline
+# Status — beta.9 candidate
 
-Development branch: `codex/nova-clip-1.0.0-beta.7-remediation`.
+Baseline main/latest public prerelease: `b798c571dad1cae03c16129e4b4c43b85b428d7a`, `v1.0.0-beta.8` (rechecked 2026-10-07).
 
-## Completed implementation scope
+The beta.9 development branch repairs embedded-browser media identity ordering and bounded fallback, UI observation cost, download lifecycle and DURL remux. See [RELEASE_BETA9.md](RELEASE_BETA9.md) for scope and evidence limits.
 
-- Durable task state, atomic manifest/resume writes, SQLite ordered migrations/backups, history keyset pagination and outbox replay.
-- Lifecycle-owned DownloadManager with per-run cancellation disposal, graceful drain and output reservation/reclaim.
-- DASH and DURL production paths, staging-only FFmpeg merge and final output commit.
-- Browser navigation generation, SPA identity propagation, deduplication and single-instance URL activation.
-- Strict setup/portable update selection, mandatory GitHub digest, bounded package extraction and journaled rollback.
-- Immediate-save settings with schema 4 migration, runtime apply and rollback.
-- Bounded structured startup diagnostics, redaction, UI progress coalescing and page subscription cleanup.
-- Centrally pinned packages, pinned Actions, stable SDK/language settings, architecture/localization/dependency gates and version-derived packaging.
-- The retired BiliNative source tree is excluded from the beta.7 production solution and release path.
-
-## Acceptance evidence
-
-Cross-platform and Windows workflows are defined in `.github/workflows/ci.yml` and `.github/workflows/windows-build.yml`. High-risk tests cover concurrent output names, stale reservations, Range validator changes, DURL/DASH manager completion, SQLite migration/recovery, GitHub asset digest validation, package extraction and updater rollback.
-
-Windows CI remains the release gate for WinUI compilation, resources.pri, real executable startup markers, page construction, portable packaging and Inno Setup output. A public tag/release is valid only after that gate is green.
+Publication remains gated on final-commit Windows build/package checks and real embedded playback -> visible current-media card -> completed download acceptance. The cloud Linux workspace has no KVM/Windows runtime; repository Windows Runner is being used. Existing page startup smoke does not prove media recognition. The user's installed version/original fault URL have not been supplied.

@@ -27,7 +27,12 @@ public sealed class HttpRangeDownloader : IDownloadEngine
 
     public HttpRangeDownloader(HttpClient? httpClient = null, RetryExecutor? retryExecutor = null, TimeSpan? idleTimeout = null)
     {
-        _httpClient = httpClient ?? new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None });
+        _httpClient = httpClient ?? new HttpClient(new MediaRedirectHandler(new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.None,
+            AllowAutoRedirect = false,
+            UseCookies = false
+        }));
         _retryExecutor = retryExecutor ?? new RetryExecutor();
         _deadline = new HttpTransferDeadline(idleTimeout);
     }
@@ -138,24 +143,8 @@ public sealed class HttpRangeDownloader : IDownloadEngine
             completed += bytes;
         }
 
-        var combinedPart = Path.Combine(taskRoot, "legacy.mp4.part");
-        await using (var output = new FileStream(combinedPart, FileMode.Create, FileAccess.Write, FileShare.Read, BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan))
-        {
-            var buffer = new byte[BufferSize];
-            foreach (var segment in request.Media.LegacySegments.OrderBy(item => item.Index))
-            {
-                var segmentPath = Path.Combine(taskRoot, $"segment-{segment.Index:D4}.part");
-                await using var input = new FileStream(segmentPath, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                int read;
-                while ((read = await _deadline.RunAsync(token => input.ReadAsync(buffer.AsMemory(), token).AsTask(), cancellationToken).ConfigureAwait(false)) > 0)
-                {
-                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                }
-            }
-
-            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
-        }
-
+        // DURL may contain FLV or independent MP4 containers. Leave every input
+        // intact; the manager owns FFmpeg remux and the atomic final output commit.
         progress.Report(new DownloadProgress(request.TaskId, DownloadTaskState.Finalizing, completed, total > 0 ? total : null));
     }
 

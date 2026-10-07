@@ -66,12 +66,20 @@ public interface IOutputReservationService : IDisposable
 
 public interface IFfmpegService
 {
+    Task<bool> CheckAvailabilityAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
+
     Task<FfmpegResult> MergeAsync(
         string videoPath,
         string audioPath,
         string outputPath,
         IProgress<double>? progress,
         CancellationToken cancellationToken);
+
+    Task<FfmpegResult> ConcatenateAsync(
+        IReadOnlyList<string> segmentPaths,
+        string outputPath,
+        CancellationToken cancellationToken) =>
+        Task.FromException<FfmpegResult>(new NotSupportedException("FFmpeg concatenation is not configured."));
 }
 
 public interface IFileNameSanitizer

@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
-    <NovaClipVersion>1.0.0-beta.8</NovaClipVersion>
-    <NovaClipAssemblyVersion>1.0.0.8</NovaClipAssemblyVersion>
+    <NovaClipVersion>1.0.0-beta.9</NovaClipVersion>
+    <NovaClipAssemblyVersion>1.0.0.9</NovaClipAssemblyVersion>
     <NovaClipRuntimeIdentifier>win-x64</NovaClipRuntimeIdentifier>
   </PropertyGroup>
 </Project>

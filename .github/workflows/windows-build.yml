@@ -6,10 +6,25 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      media_acceptance_url:
+        description: "Optional permitted public BV/AV URL: exercise real embedded playback, detection and download"
+        required: false
+        type: string
+      baseline_harness_overlay:
+        description: "Label an unchanged baseline with acceptance-only instrumentation"
+        required: false
+        default: false
+        type: boolean
   create:
 
 permissions:
   contents: read
+
+# Publication always exercises a normally playable public sample. Manual checks
+# may supply another permitted URL; ordinary PR builds retain their existing gates.
+env:
+  NOVACLIP_INPUT_ACCEPTANCE_URL: ${{ inputs.media_acceptance_url || ((startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'create' && startsWith(github.ref_name, 'publish/v'))) && 'https://www.bilibili.com/video/BV17x411w7KC/') || '' }}
 
 jobs:
   build:
@@ -111,6 +126,34 @@ jobs:
           name: NovaClip-UI-${{ github.sha }}
           path: publish/**/ui-smoke/*.png
           if-no-files-found: warn
+      - name: Ensure FFmpeg for real media acceptance
+        if: env.NOVACLIP_INPUT_ACCEPTANCE_URL != ''
+        shell: pwsh
+        run: |
+          if ($null -eq (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or $null -eq (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "ACCEPTANCE_FFMPEG_INSTALL_FAILED" }
+          }
+          $env:PATH = $env:PATH + ";" + [Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [Environment]::GetEnvironmentVariable("PATH", "User")
+          if ($null -eq (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or $null -eq (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) { throw "ACCEPTANCE_FFMPEG_PATH_UNAVAILABLE" }
+          "PATH=$env:PATH" >> $env:GITHUB_ENV
+      - name: Real embedded-browser media acceptance
+        if: env.NOVACLIP_INPUT_ACCEPTANCE_URL != ''
+        shell: pwsh
+        env:
+          NOVACLIP_INPUT_BASELINE_OVERLAY: ${{ inputs.baseline_harness_overlay }}
+        run: |
+          [xml]$versionProps = Get-Content version.props -Raw
+          $runtimeIdentifier = [string]$versionProps.Project.PropertyGroup.NovaClipRuntimeIdentifier
+          $exe = Join-Path "${{ github.workspace }}" ("publish\" + $runtimeIdentifier + "\NovaClip.exe")
+          ./scripts/verify-browser-media.ps1 -ExecutablePath $exe -VideoUrl $env:NOVACLIP_INPUT_ACCEPTANCE_URL -BuildCommit "${{ github.sha }}" -BaselineHarnessOverlay:($env:NOVACLIP_INPUT_BASELINE_OVERLAY -eq "true")
+      - name: Upload real media acceptance evidence
+        if: always() && env.NOVACLIP_INPUT_ACCEPTANCE_URL != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: NovaClip-real-media-${{ github.sha }}
+          path: publish/**/media-acceptance/*.json
+          if-no-files-found: warn
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Build installer
@@ -122,13 +165,28 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DProductVersion=$assemblyVersion" "/DDisplayVersion=$version" "/DOutputBaseFilename=NovaClip-$version-$runtimeIdentifier-setup" "/DPublishDir=${{ github.workspace }}\publish\$runtimeIdentifier" "/DOutputDir=${{ github.workspace }}\artifacts\windows" installer\NovaClip.iss
       - name: Hash deliverables
         shell: pwsh
-        run: Get-ChildItem artifacts/windows -File | Get-FileHash -Algorithm SHA256 | Format-Table
+        run: |
+          $packages = @(Get-ChildItem artifacts/windows -File | Where-Object { $_.Name.EndsWith(".zip") -or $_.Name.EndsWith("-setup.exe") } | Sort-Object Name)
+          if ($packages.Count -ne 2) { throw "RELEASE_PACKAGE_SET_INVALID" }
+          $checksums = @($packages | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + "  " + $_.Name })
+          $checksums | Set-Content artifacts/windows/SHA256SUMS.txt -Encoding ascii
+          [ordered]@{
+            schemaVersion = 1
+            product = "NovaClip"
+            version = "${{ steps.version.outputs.version }}"
+            commit = "${{ github.sha }}"
+            runtimeIdentifier = "${{ steps.version.outputs.runtimeIdentifier }}"
+            packages = @($packages | ForEach-Object { [ordered]@{ name = $_.Name; size = $_.Length; sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() } })
+          } | ConvertTo-Json -Depth 5 | Set-Content artifacts/windows/novaclip-build.json -Encoding utf8
+          $checksums | Write-Host
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: NovaClip-${{ steps.version.outputs.runtimeIdentifier }}-${{ github.sha }}
           path: |
             artifacts/windows/*.zip
             artifacts/windows/*-setup.exe
+            artifacts/windows/SHA256SUMS.txt
+            artifacts/windows/novaclip-build.json
           if-no-files-found: error
 
   release:

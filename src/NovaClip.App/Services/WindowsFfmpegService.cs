@@ -18,6 +18,8 @@ public sealed class WindowsFfmpegService : IFfmpegService
 
     public bool IsAvailable => FindFfmpeg() is not null;
     public string? Locate() => FindFfmpeg();
+    public Task<bool> CheckAvailabilityAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(() => IsAvailable, cancellationToken);
 
     public async Task<FfmpegResult> MergeAsync(
         string videoPath,
@@ -42,7 +44,67 @@ public sealed class WindowsFfmpegService : IFfmpegService
             return new FfmpegResult(false, -1, null, "FFmpeg 输入暂存文件不存在。");
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
+        var result = await RunProcessAsync(executable,
+            FfmpegCommandArguments.ForMp4Mux(videoPath, audioPath, outputPath), outputPath, cancellationToken).ConfigureAwait(false);
+        if (result.Success) progress?.Report(1);
+        return result;
+    }
+
+    public async Task<FfmpegResult> ConcatenateAsync(
+        IReadOnlyList<string> segmentPaths,
+        string outputPath,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(segmentPaths);
+        if (!IsStagingOutputPath(outputPath) || segmentPaths.Count is < 1 or > 1024)
+            return new FfmpegResult(false, -1, null, "FFmpeg concat requires bounded inputs and a NovaClip staging output.");
+        var executable = FindFfmpeg();
+        if (executable is null)
+            return new FfmpegResult(false, -1, null, "找不到 ffmpeg.exe。请先在设置中选择 FFmpeg。");
+
+        var taskRoot = Path.GetDirectoryName(Path.GetFullPath(outputPath))!;
+        var names = new List<string>(segmentPaths.Count);
+        foreach (var path in segmentPaths)
+        {
+            var name = Path.GetFileName(path);
+            // Only task-owned generated filenames enter the demuxer manifest. This
+            // keeps safe=1 and avoids arbitrary paths, protocols or escaped directives.
+            if (!Path.IsPathRooted(path) || !File.Exists(path) ||
+                !string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)), taskRoot, StringComparison.OrdinalIgnoreCase) ||
+                !name.StartsWith("segment-", StringComparison.Ordinal) ||
+                !name.EndsWith(".part", StringComparison.Ordinal) ||
+                !int.TryParse(name.AsSpan(8, name.Length - 13), out var index) || index < 0 ||
+                name != $"segment-{index:D4}.part" || names.Contains(name, StringComparer.Ordinal))
+                return new FfmpegResult(false, -1, null, "FFmpeg concat inputs must be unique segments in the current task staging directory.");
+            names.Add(name);
+        }
+
+        var manifestPath = Path.Combine(taskRoot, "concat-inputs.txt");
+        try
+        {
+            var manifest = "ffconcat version 1.0\n" + string.Join('\n', names.Select(name => $"file '{name}'")) + "\n";
+            await File.WriteAllTextAsync(manifestPath, manifest, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+            return await RunProcessAsync(executable, FfmpegCommandArguments.ForMp4Concat(manifestPath, outputPath),
+                outputPath, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            try { File.Delete(manifestPath); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                StartupDiagnostics.Warning("Could not remove FFmpeg concat manifest.", exception);
+            }
+        }
+    }
+
+    private static async Task<FfmpegResult> RunProcessAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        string? outputPath,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (outputPath is not null) Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
@@ -51,7 +113,7 @@ public sealed class WindowsFfmpegService : IFfmpegService
             RedirectStandardError = true,
             RedirectStandardOutput = true
         };
-        foreach (var argument in FfmpegCommandArguments.ForMp4Mux(videoPath, audioPath, outputPath))
+        foreach (var argument in arguments)
             startInfo.ArgumentList.Add(argument);
 
         using var process = new Process { StartInfo = startInfo };
@@ -78,9 +140,8 @@ public sealed class WindowsFfmpegService : IFfmpegService
             await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
             var output = await stdoutTask.ConfigureAwait(false);
             var error = await stderrTask.ConfigureAwait(false);
-            progress?.Report(1);
-
-            var success = process.ExitCode == 0 && File.Exists(outputPath) && new FileInfo(outputPath).Length > 0;
+            var success = process.ExitCode == 0 &&
+                (outputPath is null || File.Exists(outputPath) && new FileInfo(outputPath).Length > 0);
             var diagnostic = string.IsNullOrWhiteSpace(error) ? output : error;
             return new FfmpegResult(success, process.ExitCode, success ? outputPath : null, success ? null : diagnostic.Trim());
         }
@@ -113,39 +174,8 @@ public sealed class WindowsFfmpegService : IFfmpegService
         var executable = FindFfmpeg();
         if (executable is null) return false;
 
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = executable,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true
-            }
-        };
-        process.StartInfo.ArgumentList.Add("-version");
-        Task<string>? stdoutTask = null;
-        Task<string>? stderrTask = null;
-        try
-        {
-            if (!process.Start()) return false;
-            stdoutTask = CaptureTailAsync(process.StandardOutput);
-            stderrTask = CaptureTailAsync(process.StandardError);
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-            return process.ExitCode == 0;
-        }
-        catch (OperationCanceledException)
-        {
-            TryKill(process);
-            throw;
-        }
-        catch
-        {
-            TryKill(process);
-            return false;
-        }
+        var result = await RunProcessAsync(executable, ["-version"], null, cancellationToken).ConfigureAwait(false);
+        return result.Success;
     }
 
     private string? FindFfmpeg()
@@ -156,37 +186,33 @@ public sealed class WindowsFfmpegService : IFfmpegService
             Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg", "win-x64", "ffmpeg.exe"),
             "ffmpeg.exe"
         };
-        return candidates.FirstOrDefault(candidate =>
-            !string.IsNullOrWhiteSpace(candidate) &&
-            (Path.IsPathRooted(candidate) ? File.Exists(candidate) : IsOnPath(candidate!)));
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate)) continue;
+            if (Path.IsPathRooted(candidate))
+            {
+                if (File.Exists(candidate)) return candidate;
+            }
+            else if (FindOnPath(candidate) is { } located) return located;
+        }
+        return null;
     }
 
-    private static bool IsOnPath(string executable)
+    private static string? FindOnPath(string executable)
     {
-        try
+        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
         {
-            var startInfo = new ProcessStartInfo
+            try
             {
-                FileName = "where.exe",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            startInfo.ArgumentList.Add(executable);
-            using var process = Process.Start(startInfo);
-            if (process is null) return false;
-            if (!process.WaitForExit(2000))
-            {
-                TryKill(process);
-                return false;
+                var path = Path.Combine(directory.Trim().Trim('"'), executable);
+                if (Path.IsPathRooted(path) && File.Exists(path)) return path;
             }
-            return process.ExitCode == 0;
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+            {
+                // An invalid PATH entry must not hide later usable entries.
+            }
         }
-        catch
-        {
-            return false;
-        }
+        return null;
     }
 
     private static async Task<string> CaptureTailAsync(StreamReader reader)

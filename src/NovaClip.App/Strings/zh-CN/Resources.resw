@@ -37,4 +37,7 @@
 <data name="Settings_DownloadConnectionsHint.Text" xml:space="preserve"><value>所有下载共享此上限，默认64。大文件按需分段，小文件或不支持分段的服务器仍用单连接；过多连接可能导致卡顿或服务器限流。</value></data>
   <data name="Settings_DownloadSpeed.Header" xml:space="preserve"><value>总下载速度上限（KiB/s）</value></data>
   <data name="Settings_DownloadSpeedHint.Text" xml:space="preserve"><value>0 表示不限速。所有任务和连接共用这个上限；1024 KiB/s 等于 1 MiB/s。</value></data>
+  <data name="Detection_Waiting" xml:space="preserve"><value>正在等待当前视频的信息…</value></data>
+  <data name="Detection_Expired" xml:space="preserve"><value>媒体地址已过期，请重新播放或刷新当前视频。</value></data>
+  <data name="Download_FfmpegRequired" xml:space="preserve"><value>请先在设置中配置 FFmpeg，再下载需要合并的 DASH 音视频或 DURL 媒体。</value></data>
 </root>

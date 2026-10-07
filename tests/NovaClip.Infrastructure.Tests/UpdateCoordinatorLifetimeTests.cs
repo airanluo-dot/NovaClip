@@ -10,7 +10,7 @@ namespace NovaClip.Infrastructure.Tests
         public async Task DisposeDuringCheckKeepsCancellationSourceAliveUntilCompletion()
         {
             var service = new HeldUpdateService();
-            var coordinator = new WindowsUpdateCoordinator(service, new WindowsSettingsStore());
+            var coordinator = CreateCoordinator(service);
             var pending = coordinator.CheckAsync();
             coordinator.Dispose();
             coordinator.Stop();
@@ -25,19 +25,35 @@ namespace NovaClip.Infrastructure.Tests
         public async Task ConcurrentChecksDrainAfterDisposal()
         {
             var service = new HeldUpdateService();
-            var coordinator = new WindowsUpdateCoordinator(service, new WindowsSettingsStore());
+            using var coordinator = CreateCoordinator(service);
             var checks = Enumerable.Range(0, 8).Select(_ => coordinator.CheckAsync()).ToArray();
             coordinator.Dispose();
             service.Finish.SetResult(null);
             await Task.WhenAll(checks);
         }
 
+        [Fact]
+        public async Task CheckUsesInjectedApplicationVersion()
+        {
+            var service = new HeldUpdateService();
+            using var coordinator = CreateCoordinator(service);
+            var pending = coordinator.CheckAsync();
+            Assert.Equal("1.0.0-beta.9", service.Version);
+            service.Finish.SetResult(null);
+            Assert.Null(await pending);
+        }
+
+        private static WindowsUpdateCoordinator CreateCoordinator(IUpdateService service) =>
+            new(service, new WindowsSettingsStore(), "1.0.0-beta.9", true,
+                _ => Task.CompletedTask, () => { });
+
         private sealed class HeldUpdateService : IUpdateService
         {
             public readonly TaskCompletionSource<AppUpdateInfo?> Finish = new(TaskCreationOptions.RunContinuationsAsynchronously);
             public CancellationToken Token;
+            public string? Version;
             public Task<AppUpdateInfo?> CheckForUpdateAsync(string version, UpdateChannel channel, CancellationToken cancellationToken = default)
-            { Token = cancellationToken; return Finish.Task; }
+            { Token = cancellationToken; Version = version; return Finish.Task; }
             public Task<string> DownloadAssetAsync(AppUpdateAsset asset, string path, IProgress<double>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         }
     }
@@ -51,25 +67,11 @@ namespace NovaClip.App
     {
         public UpdateChannel UpdateChannel { get; set; } = UpdateChannel.Preview;
         public bool AutoCheckUpdates { get; set; } = true;
-    }
-    internal static class AppServices
-    {
-        public static string CurrentVersion => "1.0.0";
-        public static bool IsPortableInstall => true;
-        public static Task PrepareForUpdateAsync(CancellationToken token) => Task.CompletedTask;
+        public string? FfmpegPath { get; set; }
     }
     internal static class StartupDiagnostics
     {
         public static void Warning(string message, Exception ex) { }
         public static void Info(string message) { }
     }
-    internal static class App { public static WindowStub? MainWindow => null; }
-    internal sealed class WindowStub
-    {
-        public DispatcherStub DispatcherQueue { get; } = new();
-        public bool IsClosed { get; private set; }
-        public void Close() { IsClosed = true; }
-    }
-    internal sealed class DispatcherStub { public bool Enabled { get; set; }
-        public bool TryEnqueue(Action action) => Enabled; }
 }
