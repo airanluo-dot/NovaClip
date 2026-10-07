@@ -64,4 +64,81 @@ public sealed class PlayUrlNormalizerTests
         Assert.True(BilibiliBridgeMessageParser.TryParse(unknown, out var unknownMessage));
         Assert.False(BilibiliBridgeMessageParser.TryReadPageContext(unknownMessage!, out _));
     }
+
+    [Theory]
+    [InlineData("\"is_drm\":true,")]
+    [InlineData("\"is_drm\":1,")]
+    [InlineData("\"drm_tech_type\":2,")]
+    public void ExplicitPositiveDrmMarkersPreventDownloadCandidates(string marker)
+    {
+        var json = "{\"code\":0,\"data\":{" + marker + "\"dash\":{\"video\":[{\"id\":80,\"base_url\":\"https://media.example/video\"}]}}}";
+        var result = new PlayUrlNormalizer().Normalize(json, new PlayUrlContext("https://www.bilibili.com/video/BV1TEST", "Protected"));
+        Assert.False(result.IsSuccess);
+        Assert.Null(result.Media);
+        Assert.Equal("RESOLVE_DRM_UNSUPPORTED", result.Error!.Code);
+    }
+
+    [Fact]
+    public void UnprotectedDrmMarkerValuesRetainOrdinaryMedia()
+    {
+        const string json = "{\"code\":0,\"data\":{\"is_drm\":false,\"drm_tech_type\":0,\"dash\":{\"video\":[{\"id\":80,\"base_url\":\"https://media.example/video\"}]}}}";
+        var result = new PlayUrlNormalizer().Normalize(json, new PlayUrlContext("https://www.bilibili.com/video/BV1TEST", "Ordinary"));
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Media!.VideoTrack);
+    }
+
+    [Theory]
+    [InlineData("bv1TEST", true)]
+    [InlineData("BV1Test", false)]
+    public void BvidComparisonNormalizesPrefixAndPreservesPayloadCase(string bvid, bool expectedSuccess)
+    {
+        var json = "{\"code\":0,\"data\":{\"bvid\":\"" + bvid + "\",\"dash\":{\"video\":[{\"id\":80,\"base_url\":\"https://media.example/video\"}]}}}";
+        var result = new PlayUrlNormalizer().Normalize(json, new PlayUrlContext("https://www.bilibili.com/video/BV1TEST", "Current", "BV1TEST"));
+        Assert.Equal(expectedSuccess, result.IsSuccess);
+        if (!expectedSuccess) Assert.Equal("RESOLVE_IDENTITY_MISMATCH", result.Error!.Code);
+    }
+
+    [Theory]
+    [InlineData("{\"code\":0,\"cid\":102,\"data\":{\"video_info\":MEDIA}}")]
+    [InlineData("{\"code\":0,\"data\":{\"cid\":102,\"video_info\":MEDIA}}")]
+    [InlineData("{\"code\":0,\"result\":{\"cid\":102,\"video_info\":MEDIA}}")]
+    public void EnvelopeIdentityCannotBeDroppedWhenUnwrappingVideoInfo(string envelope)
+    {
+        const string media = "{\"dash\":{\"video\":[{\"id\":80,\"base_url\":\"https://media.example/video\"}]}}";
+        var result = new PlayUrlNormalizer().Normalize(envelope.Replace("MEDIA", media),
+            new PlayUrlContext("https://www.bilibili.com/video/BV1TEST", "Current", "BV1TEST", Cid: 101));
+        Assert.False(result.IsSuccess);
+        Assert.Equal("RESOLVE_IDENTITY_MISMATCH", result.Error!.Code);
+    }
+
+    [Theory]
+    [InlineData("{\"code\":0,\"is_drm\":true,\"data\":{\"video_info\":MEDIA}}")]
+    [InlineData("{\"code\":0,\"data\":{\"drm_tech_type\":2,\"video_info\":MEDIA}}")]
+    public void EnvelopeDrmMarkerCannotBeDroppedWhenUnwrappingVideoInfo(string envelope)
+    {
+        const string media = "{\"dash\":{\"video\":[{\"id\":80,\"base_url\":\"https://media.example/video\"}]}}";
+        var result = new PlayUrlNormalizer().Normalize(envelope.Replace("MEDIA", media),
+            new PlayUrlContext("https://www.bilibili.com/video/BV1TEST", "Current", "BV1TEST", Cid: 101));
+        Assert.False(result.IsSuccess);
+        Assert.Equal("RESOLVE_DRM_UNSUPPORTED", result.Error!.Code);
+    }
+
+    [Fact]
+    public void MatchingEnvelopeIdentityIsPreservedForNetworkCorrelation()
+    {
+        const string json = "{\"code\":0,\"data\":{\"cid\":101,\"bvid\":\"BV1TEST\",\"video_info\":{\"dash\":{\"video\":[{\"id\":80,\"base_url\":\"https://media.example/video\"}]}}}}";
+        var result = new PlayUrlNormalizer().Normalize(json, new PlayUrlContext("https://www.bilibili.com/video/BV1TEST", "Current"));
+        Assert.True(result.IsSuccess);
+        Assert.Equal(101, result.Media!.Cid);
+        Assert.Equal("BV1TEST", result.Media.Bvid);
+    }
+
+    [Fact]
+    public void ConflictingEnvelopeAndInnerIdentityRejectsIdentityFreeRequest()
+    {
+        const string json = "{\"code\":0,\"data\":{\"cid\":102,\"video_info\":{\"cid\":101,\"dash\":{\"video\":[{\"id\":80,\"base_url\":\"https://media.example/video\"}]}}}}";
+        var result = new PlayUrlNormalizer().Normalize(json, new PlayUrlContext("https://www.bilibili.com/video/BV1TEST", "Current"));
+        Assert.False(result.IsSuccess);
+        Assert.Equal("RESOLVE_IDENTITY_MISMATCH", result.Error!.Code);
+    }
 }

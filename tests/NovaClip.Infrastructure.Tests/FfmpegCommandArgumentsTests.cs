@@ -15,4 +15,15 @@ public sealed class FfmpegCommandArgumentsTests
         Assert.Contains("video with spaces.m4s.part", args);
         Assert.Contains("copy", args);
     }
+
+    [Fact]
+    public void ConcatUsesSafeRelativeManifestAndExplicitMp4Muxer()
+    {
+        var args = FfmpegCommandArguments.ForMp4Concat("inputs with spaces.txt", "final-output.tmp");
+        Assert.Contains("inputs with spaces.txt", args);
+        Assert.Equal("1", args[args.ToList().IndexOf("-safe") + 1]);
+        Assert.Equal("-f", args[^3]);
+        Assert.Equal("mp4", args[^2]);
+        Assert.Equal("final-output.tmp", args[^1]);
+    }
 }

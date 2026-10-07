@@ -17,7 +17,11 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
     private readonly DownloadPersistenceWorker? _persistence;
     private readonly SemaphoreSlim _slots;
     private readonly object _slotsGate = new();
+    private readonly object _admissionGate = new();
     private readonly ConcurrentDictionary<Guid, DownloadWork> _work = new();
+    private TaskCompletionSource? _admissionsDrained;
+    private Task? _disposalTask;
+    private int _activeAdmissions;
     private int _maxConcurrentTasks;
     private int _slotDeficit;
     private int _accepting = 1;
@@ -58,10 +62,14 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             request = request with { OutputFileName = Path.ChangeExtension(request.OutputFileName, ".m4a") };
         }
 
-        if (!IsAcceptingWork) throw new InvalidOperationException("The application is shutting down and no new downloads are accepted.");
         cancellationToken.ThrowIfCancellationRequested();
+        using var admission = BeginAdmission();
+        if (RequiresFfmpeg(request) &&
+            (_ffmpeg is null || !await _ffmpeg.CheckAvailabilityAsync(cancellationToken).ConfigureAwait(false)))
+            throw new FfmpegUnavailableException();
 
         var reservation = await _reservations.ReserveAsync(request.TaskId, request.OutputDirectory, request.OutputFileName, cancellationToken).ConfigureAwait(false);
+        var added = false;
         try
         {
             var now = DateTimeOffset.UtcNow;
@@ -81,13 +89,15 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             };
             var work = new DownloadWork(request, snapshot, reservation);
             if (!_work.TryAdd(request.TaskId, work)) throw new InvalidOperationException("A task with this ID already exists.");
-            Publish(snapshot);
+            added = true;
             await PersistCriticalAsync(snapshot).ConfigureAwait(false);
+            Publish(snapshot);
             StartRun(work);
             return request.TaskId;
         }
         catch
         {
+            if (added) _work.TryRemove(request.TaskId, out _);
             await _reservations.ReleaseAsync(reservation, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
@@ -96,25 +106,28 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
     public async Task PauseAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using var admission = TryBeginAdmission();
+        if (admission is null) return;
         if (!_work.TryGetValue(taskId, out var work)) return;
 
-        CancellationTokenSource? stopSource;
+        DownloadRun? run;
         Task? runTask;
         lock (work.Gate)
         {
             if (work.Snapshot.State is DownloadTaskState.Completed or DownloadTaskState.Cancelled or DownloadTaskState.Paused or DownloadTaskState.Failed) return;
             work.PauseRequested = true;
-            stopSource = work.CurrentRun?.StopSource;
+            run = work.CurrentRun;
             runTask = work.RunTask;
         }
 
-        if (stopSource is not null) await stopSource.CancelAsync().ConfigureAwait(false);
+        if (run is not null) await run.RequestStopAsync().ConfigureAwait(false);
         if (runTask is not null) await ObserveTaskAsync(runTask).ConfigureAwait(false);
     }
 
     public async Task ResumeAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using var admission = BeginAdmission();
         if (!_work.TryGetValue(taskId, out var work)) return;
 
         Task? previousRun;
@@ -140,9 +153,11 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
     public async Task CancelAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using var admission = TryBeginAdmission();
+        if (admission is null) return;
         if (!_work.TryGetValue(taskId, out var work)) return;
 
-        CancellationTokenSource? stopSource;
+        DownloadRun? run;
         Task? runTask;
         DownloadTaskSnapshot? cancelled = null;
         lock (work.Gate)
@@ -154,12 +169,12 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             {
                 work.Snapshot = work.Snapshot with { State = DownloadTaskState.Cancelled, UpdatedAt = DateTimeOffset.UtcNow };
                 cancelled = work.Snapshot;
-                stopSource = null;
+                run = null;
                 runTask = null;
             }
             else
             {
-                stopSource = work.CurrentRun?.StopSource;
+                run = work.CurrentRun;
                 runTask = work.RunTask;
             }
         }
@@ -172,7 +187,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             return;
         }
 
-        if (stopSource is not null) await stopSource.CancelAsync().ConfigureAwait(false);
+        if (run is not null) await run.RequestStopAsync().ConfigureAwait(false);
         if (runTask is not null) await ObserveTaskAsync(runTask).ConfigureAwait(false);
     }
 
@@ -181,6 +196,8 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
     public void SetMaxConcurrentTasks(int maxConcurrentTasks)
     {
+        using var admission = TryBeginAdmission();
+        if (admission is null) return;
         var requested = Math.Clamp(maxConcurrentTasks, 1, 3);
         lock (_slotsGate)
         {
@@ -207,7 +224,9 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
     public async Task RestoreAsync(CancellationToken cancellationToken = default)
     {
-        if (_repository is null || !IsAcceptingWork) return;
+        if (_repository is null) return;
+        using var admission = TryBeginAdmission();
+        if (admission is null) return;
         await ReplayObligationsAsync(cancellationToken).ConfigureAwait(false);
         var snapshots = await _repository.GetAllAsync(cancellationToken).ConfigureAwait(false);
         foreach (var snapshot in snapshots.Where(item => item.State is not (DownloadTaskState.Completed or DownloadTaskState.Cancelled)))
@@ -258,26 +277,53 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
     public async Task ShutdownAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
-        Interlocked.Exchange(ref _accepting, 0);
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        Task admissions;
+        lock (_admissionGate)
+        {
+            Volatile.Write(ref _accepting, 0);
+            admissions = _activeAdmissions == 0
+                ? Task.CompletedTask
+                : (_admissionsDrained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+        }
+        // Stop existing transfers before waiting for reservations/persistence that
+        // may still be admitting a task. Every phase shares the same grace period.
+        var runs = CaptureRunsToStop();
+        await WaitWithinBudgetAsync(Task.WhenAll(runs.Select(run => run.RequestStopAsync()))).ConfigureAwait(false);
+        await WaitWithinBudgetAsync(admissions).ConfigureAwait(false);
+        runs.AddRange(CaptureRunsToStop());
+        await WaitWithinBudgetAsync(Task.WhenAll(runs.Select(run => run.RequestStopAsync()))).ConfigureAwait(false);
+        await WaitWithinBudgetAsync(Task.WhenAll(runs.Distinct().Select(run => ObserveTaskAsync(run.Task)))).ConfigureAwait(false);
+        if (_persistence is not null)
+            await _persistence.DrainAsync(Remaining(), cancellationToken).ConfigureAwait(false);
 
-        var runs = new List<(CancellationTokenSource Source, Task Task)>();
+        TimeSpan Remaining()
+        {
+            var remaining = timeout - elapsed.Elapsed;
+            if (remaining <= TimeSpan.Zero) throw new TimeoutException("Download shutdown exceeded its grace period.");
+            return remaining;
+        }
+
+        async Task WaitWithinBudgetAsync(Task task)
+        {
+            if (task.IsCompleted) await task.ConfigureAwait(false);
+            else await task.WaitAsync(Remaining(), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private List<DownloadRun> CaptureRunsToStop()
+    {
+        var runs = new List<DownloadRun>();
         foreach (var work in _work.Values)
         {
             lock (work.Gate)
             {
-                if (work.Snapshot.State is DownloadTaskState.Completed or DownloadTaskState.Cancelled or DownloadTaskState.Paused or DownloadTaskState.Failed) continue;
-                if (work.CurrentRun is { } run && work.RunTask is { } task)
-                {
-                    work.PauseRequested = true;
-                    runs.Add((run.StopSource, task));
-                }
+                if (work.CurrentRun is not { } run) continue;
+                work.PauseRequested = true;
+                runs.Add(run);
             }
         }
-
-        foreach (var run in runs) await run.Source.CancelAsync().ConfigureAwait(false);
-        var allRuns = Task.WhenAll(runs.Select(item => ObserveTaskAsync(item.Task)));
-        await allRuns.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
-        if (_persistence is not null) await _persistence.DrainAsync(timeout, cancellationToken).ConfigureAwait(false);
+        return runs;
     }
 
     private void StartRun(DownloadWork work)
@@ -292,6 +338,28 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             work.CurrentRun = run;
             run.Task = RunAsync(work, run);
             work.RunTask = run.Task;
+        }
+    }
+
+    private Admission BeginAdmission() => TryBeginAdmission() ??
+        throw new InvalidOperationException("The application is shutting down and no new downloads are accepted.");
+
+    private Admission? TryBeginAdmission()
+    {
+        lock (_admissionGate)
+        {
+            if (!IsAcceptingWork) return null;
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            _activeAdmissions++;
+            return new Admission(this);
+        }
+    }
+
+    private void EndAdmission()
+    {
+        lock (_admissionGate)
+        {
+            if (--_activeAdmissions == 0) _admissionsDrained?.TrySetResult();
         }
     }
 
@@ -321,7 +389,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 Publish(snapshot);
             });
 
-            var downloadState = work.Request.FileTrack is not null ? DownloadTaskState.DownloadingFile : work.Request.Media.LegacySegments.Count > 0 && work.Request.VideoTrack is null && work.Request.AudioTrack is null
+            var downloadState = work.Request.FileTrack is not null ? DownloadTaskState.DownloadingFile : IsLegacyRequest(work.Request)
                 ? DownloadTaskState.DownloadingSegments
                 : work.Request.VideoTrack is not null
                     ? DownloadTaskState.DownloadingVideo
@@ -330,9 +398,11 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
             await _engine.DownloadAsync(work.Request, progress, run.StopSource.Token).ConfigureAwait(false);
             var taskRoot = HttpRangeDownloader.GetTaskRoot(work.Request.OutputDirectory, work.Request.TaskId);
-            var requiresMerge = work.Request.MergeAfterDownload &&
+            var requiresDashMerge = work.Request.MergeAfterDownload &&
                 work.Request.VideoTrack is not null &&
                 work.Request.AudioTrack is not null;
+            var requiresSegmentMerge = IsLegacyRequest(work.Request);
+            var requiresMerge = requiresDashMerge || requiresSegmentMerge;
 
             if (!requiresMerge && !await SetStateAsync(work, DownloadTaskState.Finalizing, run.RunId).ConfigureAwait(false)) return;
 
@@ -342,21 +412,21 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
                 if (!await SetStateAsync(work, DownloadTaskState.Merging, run.RunId).ConfigureAwait(false)) return;
                 var staging = Path.Combine(taskRoot, "final-output.tmp");
                 TryDeleteFile(staging);
-                var result = await _ffmpeg.MergeAsync(
-                    Path.Combine(taskRoot, "video.m4s.part"),
-                    Path.Combine(taskRoot, "audio.m4s.part"),
-                    staging,
-                    null,
-                    run.StopSource.Token).ConfigureAwait(false);
+                var result = requiresSegmentMerge
+                    ? await _ffmpeg.ConcatenateAsync(
+                        work.Request.Media.LegacySegments.OrderBy(segment => segment.Index)
+                            .Select(segment => Path.Combine(taskRoot, $"segment-{segment.Index:D4}.part")).ToArray(),
+                        staging,
+                        run.StopSource.Token).ConfigureAwait(false)
+                    : await _ffmpeg.MergeAsync(
+                        Path.Combine(taskRoot, "video.m4s.part"),
+                        Path.Combine(taskRoot, "audio.m4s.part"),
+                        staging,
+                        null,
+                        run.StopSource.Token).ConfigureAwait(false);
                 if (!result.Success) throw new InvalidOperationException(result.ErrorMessage ?? "FFmpeg merge failed.");
                 ValidateStagingFile(staging);
                 if (!await SetStateAsync(work, DownloadTaskState.Finalizing, run.RunId).ConfigureAwait(false)) return;
-                await CommitPrimaryAsync(work, staging, run.StopSource.Token).ConfigureAwait(false);
-            }
-            else if (work.Request.Media.LegacySegments.Count > 0)
-            {
-                var staging = Path.Combine(taskRoot, "legacy.mp4.part");
-                ValidateStagingFile(staging);
                 await CommitPrimaryAsync(work, staging, run.StopSource.Token).ConfigureAwait(false);
             }
             else if (work.Request.VideoTrack is not null && work.Request.AudioTrack is not null && !work.Request.MergeAfterDownload)
@@ -467,7 +537,7 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
             {
                 if (work.CurrentRun?.RunId == run.RunId) work.CurrentRun = null;
             }
-            run.StopSource.Dispose();
+            run.Dispose();
         }
     }
 
@@ -800,6 +870,13 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         !string.IsNullOrWhiteSpace(uri.Host) &&
         string.IsNullOrEmpty(uri.UserInfo);
 
+    private static bool RequiresFfmpeg(DownloadRequest request) =>
+        IsLegacyRequest(request) ||
+        request.MergeAfterDownload && request.VideoTrack is not null && request.AudioTrack is not null;
+
+    private static bool IsLegacyRequest(DownloadRequest request) =>
+        request.FileTrack is null && request.VideoTrack is null && request.AudioTrack is null && request.Media.LegacySegments.Count > 0;
+
     private static void ValidateRequest(DownloadRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -830,26 +907,48 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        foreach (var work in _work.Values)
+        lock (_admissionGate)
         {
-            lock (work.Gate) work.CurrentRun?.StopSource.Cancel();
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            Volatile.Write(ref _accepting, 0);
+            var admissions = _activeAdmissions == 0
+                ? Task.CompletedTask
+                : (_admissionsDrained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+            _disposalTask = DisposeResourcesWhenIdleAsync(admissions);
         }
+        GC.SuppressFinalize(this);
+    }
 
+    private async Task DisposeResourcesWhenIdleAsync(Task admissions)
+    {
+        var runs = CaptureRunsToStop();
+        await Task.WhenAll(runs.Select(run => run.RequestStopAsync())).ConfigureAwait(false);
+        // A timed-out shutdown must leave resources alive while admitted work can
+        // still reach them. StartRun rejects disposal; its enqueue rolls back safely.
+        await admissions.ConfigureAwait(false);
+        runs.AddRange(CaptureRunsToStop());
+        await Task.WhenAll(runs.Select(run => run.RequestStopAsync())).ConfigureAwait(false);
+        await Task.WhenAll(runs.Distinct().Select(run => ObserveTaskAsync(run.Task))).ConfigureAwait(false);
+        if (_persistence is not null) await _persistence.DisposeAsync().ConfigureAwait(false);
         _slots.Dispose();
         if (_ownsReservations) _reservations.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Volatile.Read(ref _disposed) == 0)
         {
-            try { await ShutdownAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); } catch { }
+            try { await ShutdownAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); }
+            catch
+            {
+                Dispose();
+                throw;
+            }
             Dispose();
         }
-
-        if (_persistence is not null) await _persistence.DisposeAsync().ConfigureAwait(false);
+        Task? disposal;
+        lock (_admissionGate) disposal = _disposalTask;
+        if (disposal is not null) await disposal.ConfigureAwait(false);
     }
 
     private sealed class DownloadWork
@@ -887,8 +986,17 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         }
     }
 
-    private sealed class DownloadRun
+    private sealed class Admission(DownloadManager owner) : IDisposable
     {
+        private DownloadManager? _owner = owner;
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.EndAdmission();
+    }
+
+    private sealed class DownloadRun : IDisposable
+    {
+        private readonly object _lifetimeGate = new();
+        private bool _disposed;
+        private Task? _stopTask;
         public DownloadRun(long runId)
         {
             RunId = runId;
@@ -897,6 +1005,26 @@ public sealed class DownloadManager : IDownloadManager, IDisposable, IAsyncDispo
         public long RunId { get; }
         public CancellationTokenSource StopSource { get; } = new();
         public Task Task { get; set; } = Task.CompletedTask;
+
+        public Task RequestStopAsync()
+        {
+            lock (_lifetimeGate) return _disposed
+                ? _stopTask ?? System.Threading.Tasks.Task.CompletedTask
+                : _stopTask ??= StopSource.CancelAsync();
+        }
+
+        public void Dispose()
+        {
+            lock (_lifetimeGate)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                if (_stopTask is { IsCompleted: false })
+                    _ = _stopTask.ContinueWith(static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+                        StopSource, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                else StopSource.Dispose();
+            }
+        }
     }
 
     private static class StartupDiagnosticsAdapter

@@ -1,21 +1,11 @@
-# Status — 1.0.0-beta.7 Remediation and Safety Baseline
+# Status — beta.9
 
-Development branch: `codex/nova-clip-1.0.0-beta.7-remediation`.
+Baseline main/latest public prerelease: `b798c571dad1cae03c16129e4b4c43b85b428d7a`, `v1.0.0-beta.8` (rechecked 2026-10-07).
 
-## Completed implementation scope
+The beta.9 change repairs embedded-browser media identity ordering and bounded fallback, UI observation cost, download lifecycle and DURL remux. See [RELEASE_BETA9.md](RELEASE_BETA9.md) for scope and evidence limits.
 
-- Durable task state, atomic manifest/resume writes, SQLite ordered migrations/backups, history keyset pagination and outbox replay.
-- Lifecycle-owned DownloadManager with per-run cancellation disposal, graceful drain and output reservation/reclaim.
-- DASH and DURL production paths, staging-only FFmpeg merge and final output commit.
-- Browser navigation generation, SPA identity propagation, deduplication and single-instance URL activation.
-- Strict setup/portable update selection, mandatory GitHub digest, bounded package extraction and journaled rollback.
-- Immediate-save settings with schema 4 migration, runtime apply and rollback.
-- Bounded structured startup diagnostics, redaction, UI progress coalescing and page subscription cleanup.
-- Centrally pinned packages, pinned Actions, stable SDK/language settings, architecture/localization/dependency gates and version-derived packaging.
-- The retired BiliNative source tree is excluded from the beta.7 production solution and release path.
+Candidate `6b494d9` passed [real Windows embedded-browser acceptance](https://github.com/airanluo-dot/NovaClip/actions/runs/37586845978): playback, visible current media, refresh, Home clearing, history traversal and an actual completed HEVC/AAC MP4 download. The acceptance-only beta.8 baseline played the same video but failed Home identity convergence. The final navigation guard adds current NavigationId checks, outgoing-document isolation and canceled-navigation recovery; a separate opt-in sample verifies another video, exact p2 CID and rapid return.
 
-## Acceptance evidence
+Guarded candidate `0ee9766` passed [both real samples](https://github.com/airanluo-dot/NovaClip/actions/runs/37589314573), including the second video's p1/p2 CID change and rapid return followed by download. Publication exercises both samples automatically. Setup is built from clean staging and installed to verify hashes and absence of portable/test artifacts.
 
-Cross-platform and Windows workflows are defined in `.github/workflows/ci.yml` and `.github/workflows/windows-build.yml`. High-risk tests cover concurrent output names, stale reservations, Range validator changes, DURL/DASH manager completion, SQLite migration/recovery, GitHub asset digest validation, package extraction and updater rollback.
-
-Windows CI remains the release gate for WinUI compilation, resources.pri, real executable startup markers, page construction, portable packaging and Inno Setup output. A public tag/release is valid only after that gate is green.
+Publication is gated on final-commit Windows build/package checks and real embedded playback -> visible current-media card -> completed download acceptance. The cloud Linux workspace has no KVM/Windows runtime; repository Windows Runner provides actual WinUI/WebView2 evidence. Existing page startup smoke alone does not prove recognition. The user's installed version/original fault URL have not been supplied. CPU/working-set evidence excludes child processes; no measured percentage improvement is established.

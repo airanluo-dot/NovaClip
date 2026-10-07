@@ -47,7 +47,7 @@ VersionInfoDescription=NovaClip Bilibili native Windows download manager
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#PublishDir}\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "portable.marker;novaclip-package-manifest.json"
+Source: "{#PublishDir}\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "portable.marker,novaclip-package-manifest.json"
 
 [Icons]
 Name: "{autoprograms}\\NovaClip"; Filename: "{app}\\{#ProductExe}"

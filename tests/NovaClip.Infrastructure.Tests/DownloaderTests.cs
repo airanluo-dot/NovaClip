@@ -103,7 +103,7 @@ public sealed class DownloaderTests
     }
 
     [Fact]
-    public async Task DownloadsLegacyDurlSegmentsToOwnedStagingFile()
+    public async Task DownloadsLegacyDurlContainersSeparatelyForRemux()
     {
         var root = CreateRoot();
         try
@@ -146,8 +146,10 @@ public sealed class DownloaderTests
             var taskRoot = HttpRangeDownloader.GetTaskRoot(root, request.TaskId);
             Assert.False(File.Exists(output));
             Assert.Equal(
-                new byte[] { 1, 2, 3, 4 },
-                await File.ReadAllBytesAsync(Path.Combine(taskRoot, "legacy.mp4.part")));
+                new byte[] { 1, 2 },
+                await File.ReadAllBytesAsync(Path.Combine(taskRoot, "segment-0000.part")));
+            Assert.Equal(new byte[] { 3, 4 }, await File.ReadAllBytesAsync(Path.Combine(taskRoot, "segment-0001.part")));
+            Assert.False(File.Exists(Path.Combine(taskRoot, "legacy.mp4.part")));
             Assert.True(File.Exists(Path.Combine(taskRoot, "task.json")));
         }
         finally

@@ -15,7 +15,8 @@ public sealed record PageIdentity(
     long NavigationGeneration,
     string? Title = null,
     string? EpisodeTitle = null,
-    bool IsBangumi = false);
+    bool IsBangumi = false,
+    int? PageNumber = null);
 public sealed record MediaFingerprint(string PageUrl, string? Bvid, long? Aid, long? Cid, long? EpisodeId, int? QualityId, string? Codec, long NavigationGeneration);
 public sealed record DetectionDiagnostic(string EventCode, MediaDetectionState State, DateTimeOffset Timestamp, string? Detail = null);
 

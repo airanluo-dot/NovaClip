@@ -28,6 +28,7 @@ public sealed partial class MainWindow : Window
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
         StartupDiagnostics.Info("MainWindow.Closed");
+        Pages.BrowserPage.Instance?.Dispose();
         AppServices.BeginShutdown();
         (Microsoft.UI.Xaml.Application.Current as App)?.DisposeSingleInstance();
     }

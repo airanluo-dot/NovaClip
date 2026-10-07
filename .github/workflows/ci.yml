@@ -39,6 +39,8 @@ jobs:
           dotnet build src/NovaClip.Bilibili/NovaClip.Bilibili.csproj -c Release
           dotnet build src/NovaClip.Infrastructure/NovaClip.Infrastructure.csproj -c Release
           dotnet build src/NovaClip.Updater/NovaClip.Updater.csproj -c Release
+      - name: Browser bridge focused regressions
+        run: node --test tests/browser-bridge/bilibili-bridge.test.cjs
       - name: Test
         run: |
           dotnet test tests/NovaClip.Core.Tests/NovaClip.Core.Tests.csproj -c Release

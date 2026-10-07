@@ -248,16 +248,8 @@ public sealed record AppUpdateInfo(
     IReadOnlyList<AppUpdateAsset> Assets)
 {
     public AppUpdateAsset? SetupAsset => Assets.FirstOrDefault(a =>
-        IsSafeAssetName(a.Name) &&
-        a.Name.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase));
+        UpdatePackagePolicy.IsExpectedAsset(a, portable: false));
 
     public AppUpdateAsset? PortableAsset => Assets.FirstOrDefault(a =>
-        IsSafeAssetName(a.Name) &&
-        a.Name.EndsWith("-portable.zip", StringComparison.OrdinalIgnoreCase));
-
-
-    private static bool IsSafeAssetName(string name) =>
-        !string.IsNullOrWhiteSpace(name) &&
-        name.IndexOfAny(['/', '\\', '\0']) < 0 &&
-        Path.GetFileName(name) == name;
+        UpdatePackagePolicy.IsExpectedAsset(a, portable: true));
 }

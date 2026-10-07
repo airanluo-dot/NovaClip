@@ -48,12 +48,12 @@ public static class AppServices
             StartupDiagnostics.Info("Loading settings.");
             await Settings.LoadAsync().ConfigureAwait(true);
 
-            MediaHttpClient = new HttpClient(new HttpClientHandler
+            MediaHttpClient = new HttpClient(new MediaRedirectHandler(new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.None,
                 UseCookies = false,
-                AllowAutoRedirect = true
-            })
+                AllowAutoRedirect = false
+            }))
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
@@ -82,7 +82,18 @@ public static class AppServices
                 Reservations,
                 Repository);
             UpdateService = new GitHubReleaseUpdateService(UpdateHttpClient, Settings.UpdateFeedRepository, WindowsSettingsStore.GitHubToken);
-            UpdateCoordinator = new WindowsUpdateCoordinator(UpdateService, Settings);
+            UpdateCoordinator = new WindowsUpdateCoordinator(
+                UpdateService,
+                Settings,
+                CurrentVersion,
+                IsPortableInstall,
+                PrepareForUpdateAsync,
+                () =>
+                {
+                    var window = App.MainWindow ?? throw new InvalidOperationException("UPDATE_WINDOW_UNAVAILABLE");
+                    if (!window.DispatcherQueue.TryEnqueue(window.Close))
+                        throw new InvalidOperationException("UPDATE_SHUTDOWN_DISPATCH_FAILED");
+                });
             SettingsCoordinator = new SettingsApplicationCoordinator(Settings, Downloads, Downloader.Connections, Downloader.Bandwidth);
 
             StartupDiagnostics.Info("Initializing SQLite repository.");
