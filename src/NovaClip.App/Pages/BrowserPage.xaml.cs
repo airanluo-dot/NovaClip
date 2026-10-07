@@ -12,7 +12,7 @@ using Microsoft.Web.WebView2.Core;
 
 namespace NovaClip.App.Pages;
 
-public sealed partial class BrowserPage : Page
+public sealed partial class BrowserPage : Page, IDisposable
 {
     private const int MaxPlayUrlResponseCharacters = 10_000_000;
     private readonly BilibiliUrlResolver _urlResolver = new();
@@ -260,7 +260,11 @@ public sealed partial class BrowserPage : Page
             !BrowserNavigationPolicy.IsBilibiliHost(uri.Host)) return;
         var previousGeneration = _detector.Snapshot.Page?.NavigationGeneration;
         var generation = _mediaSession.UpdatePageContext(new PageIdentity(sender.Source, null, null, null, null, 0));
-        if (generation != previousGeneration) ScheduleDetectionSettlement();
+        if (generation != previousGeneration)
+        {
+            ScheduleDetectionSettlement();
+            _ = ProbePageMediaAsync(sender);
+        }
     }
 
     private void Core_HistoryChanged(CoreWebView2 sender, object args) =>
@@ -772,28 +776,19 @@ public sealed partial class BrowserPage : Page
     private bool IsCurrentPageContext(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var contextUri) ||
-            !Uri.TryCreate(BrowserWebView.Source?.ToString(), UriKind.Absolute, out var currentUri))
+            !Uri.TryCreate(BrowserWebView.CoreWebView2?.Source ?? BrowserWebView.Source?.ToString(), UriKind.Absolute, out var currentUri))
         {
             return false;
         }
 
+        // Source may still name the outgoing document between NavigationStarting
+        // and SourceChanged. Its messages must not turn the intended new page back
+        // into that old video; the current URI and the navigation target both apply.
+        var expectedUrl = _detector.Snapshot.Page?.PageUrl;
         return BrowserNavigationPolicy.IsBilibiliHost(contextUri.Host) &&
-            contextUri.Scheme.Equals(currentUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
-            contextUri.Host.Equals(currentUri.Host, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(contextUri.AbsolutePath, currentUri.AbsolutePath, StringComparison.Ordinal) &&
-            string.Equals(PagePart(contextUri), PagePart(currentUri), StringComparison.Ordinal);
-    }
-
-    private static string PagePart(Uri uri)
-    {
-        foreach (var item in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var pair = item.Split('=', 2);
-            if (pair[0].Equals("p", StringComparison.OrdinalIgnoreCase) && pair.Length == 2 &&
-                int.TryParse(pair[1], CultureInfo.InvariantCulture, out var part) && part > 0)
-                return part.ToString(CultureInfo.InvariantCulture);
-        }
-        return "1";
+            BilibiliMediaIdentity.IsSamePage(contextUri, currentUri) &&
+            (expectedUrl is null || Uri.TryCreate(expectedUrl, UriKind.Absolute, out var expectedUri) &&
+                BilibiliMediaIdentity.IsSamePage(contextUri, expectedUri));
     }
 
     private static async Task<string?> ReadBoundedTextAsync(Stream stream, int maxCharacters, CancellationToken cancellationToken)
@@ -911,6 +906,12 @@ public sealed partial class BrowserPage : Page
         BrowserWebView.Close();
         if (ReferenceEquals(Instance, this)) Instance = null;
         if (ReferenceEquals(Current, this)) Current = null;
+    }
+
+    public void Dispose()
+    {
+        CloseBrowser();
+        GC.SuppressFinalize(this);
     }
 
     private static string QualityName(int? id) => id switch

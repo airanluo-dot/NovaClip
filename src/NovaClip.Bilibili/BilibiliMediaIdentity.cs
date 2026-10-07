@@ -4,8 +4,15 @@ using NovaClip.Contracts;
 namespace NovaClip.Bilibili;
 
 /// <summary>Content identity rules shared by observations and page-context enrichment.</summary>
-internal static class BilibiliMediaIdentity
+public static class BilibiliMediaIdentity
 {
+    public static bool IsSamePage(Uri left, Uri right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        return left.IsAbsoluteUri && right.IsAbsoluteUri && SameResource(left.ToString(), right.ToString());
+    }
+
     internal static PageIdentity FromUri(Uri uri, long generation)
     {
         var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
