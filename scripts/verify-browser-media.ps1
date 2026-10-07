@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $exe = (Resolve-Path $ExecutablePath).Path
 $root = Split-Path -Parent $exe
 $resultPath = Join-Path $root "media-acceptance\result.json"
+if (Get-Process NovaClip -ErrorAction SilentlyContinue) { throw "REAL_MEDIA_ACCEPTANCE_REQUIRES_APP_CLOSED" }
 if (Test-Path $resultPath) { Remove-Item $resultPath -Force }
 $env:NOVACLIP_MEDIA_ACCEPTANCE_URL = $VideoUrl
 $env:NOVACLIP_BUILD_COMMIT = $BuildCommit
@@ -22,7 +23,10 @@ try {
         Start-Sleep -Milliseconds 500
         $process.Refresh()
     } while (-not (Test-Path $resultPath) -and -not $process.HasExited -and (Get-Date) -lt $deadline)
-    if (-not (Test-Path $resultPath)) { throw "REAL_MEDIA_ACCEPTANCE_RESULT_MISSING" }
+    if (-not (Test-Path $resultPath)) {
+        $reason = if ($process.HasExited) { "APP_EXITED" } else { "DEADLINE_EXCEEDED" }
+        throw ("REAL_MEDIA_ACCEPTANCE_RESULT_MISSING:" + $reason)
+    }
     $result = Get-Content $resultPath -Raw | ConvertFrom-Json
     if ($result.buildCommit -ne $BuildCommit) { throw "REAL_MEDIA_ACCEPTANCE_BUILD_MISMATCH" }
     if ($result.status -ne "passed") {

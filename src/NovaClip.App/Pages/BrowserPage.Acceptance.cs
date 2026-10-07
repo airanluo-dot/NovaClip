@@ -8,7 +8,7 @@ public sealed partial class BrowserPage
     internal MediaDetectionSnapshot AcceptanceSnapshot => _detector.Snapshot;
     internal bool IsPageBridgeReady => _initializationTask?.IsCompletedSuccessfully == true && HasInitializedWebView;
     internal bool IsMediaCardReady => AddDownloadButton.IsEnabled && MediaDetails.Visibility == Visibility.Visible;
-    internal Task<string> ExecuteAcceptanceScriptAsync(string script) => BrowserWebView.CoreWebView2?.ExecuteScriptAsync(script) ?? Task.FromResult("null");
+    internal Task<string> ExecuteAcceptanceScriptAsync(string script) => BrowserWebView.CoreWebView2 is { } core ? core.ExecuteScriptAsync(script).AsTask() : Task.FromResult("null");
     internal void SelectLowestAcceptanceQuality()
     {
         if (_detector.Snapshot.Media is not MediaDescriptor media) return;
