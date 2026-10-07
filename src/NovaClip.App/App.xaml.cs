@@ -72,6 +72,13 @@ public partial class App : Application
                 await MainWindow.RunSmokeNavigationAsync();
             }
 
+            if (Environment.GetEnvironmentVariable("NOVACLIP_MEDIA_ACCEPTANCE_URL") is { Length: > 0 } acceptanceUrl)
+            {
+                await BrowserMediaAcceptance.RunAsync(
+                    Pages.BrowserPage.Current ?? Pages.BrowserPage.Instance ?? throw new InvalidOperationException("BROWSER_ACCEPTANCE_PAGE_MISSING"),
+                    acceptanceUrl);
+            }
+
             StartupDiagnostics.Info("App.StartupCompleted");
             AppServices.StartBackgroundUpdateCheck();
         }

@@ -6,6 +6,16 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      media_acceptance_url:
+        description: "Optional permitted public BV/AV URL: exercise real embedded playback, detection and download"
+        required: false
+        type: string
+      baseline_harness_overlay:
+        description: "Label an unchanged baseline with acceptance-only instrumentation"
+        required: false
+        default: false
+        type: boolean
   create:
 
 permissions:
@@ -110,6 +120,35 @@ jobs:
         with:
           name: NovaClip-UI-${{ github.sha }}
           path: publish/**/ui-smoke/*.png
+          if-no-files-found: warn
+      - name: Ensure FFmpeg for real media acceptance
+        if: github.event_name == 'create' || (github.event_name == 'workflow_dispatch' && inputs.media_acceptance_url != '')
+        shell: pwsh
+        run: |
+          if ($null -eq (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or $null -eq (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "ACCEPTANCE_FFMPEG_INSTALL_FAILED" }
+          }
+          $env:PATH = $env:PATH + ";" + [Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [Environment]::GetEnvironmentVariable("PATH", "User")
+          if ($null -eq (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or $null -eq (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) { throw "ACCEPTANCE_FFMPEG_PATH_UNAVAILABLE" }
+          "PATH=$env:PATH" >> $env:GITHUB_ENV
+      - name: Real embedded-browser media acceptance
+        if: github.event_name == 'create' || (github.event_name == 'workflow_dispatch' && inputs.media_acceptance_url != '')
+        shell: pwsh
+        env:
+          NOVACLIP_INPUT_ACCEPTANCE_URL: https://www.bilibili.com/video/BV17x411w7KC/
+          NOVACLIP_INPUT_BASELINE_OVERLAY: true
+        run: |
+          [xml]$versionProps = Get-Content version.props -Raw
+          $runtimeIdentifier = [string]$versionProps.Project.PropertyGroup.NovaClipRuntimeIdentifier
+          $exe = Join-Path "${{ github.workspace }}" ("publish\" + $runtimeIdentifier + "\NovaClip.exe")
+          ./scripts/verify-browser-media.ps1 -ExecutablePath $exe -VideoUrl $env:NOVACLIP_INPUT_ACCEPTANCE_URL -BuildCommit "${{ github.sha }}" -BaselineHarnessOverlay:($env:NOVACLIP_INPUT_BASELINE_OVERLAY -eq "true")
+      - name: Upload real media acceptance evidence
+        if: always() && github.event_name == 'create' || (github.event_name == 'workflow_dispatch' && inputs.media_acceptance_url != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: NovaClip-real-media-${{ github.sha }}
+          path: publish/**/media-acceptance/*.json
           if-no-files-found: warn
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y

@@ -220,7 +220,7 @@ public sealed partial class BrowserPage : Page
 
     private static void PersistLastPage(string? source)
     {
-        if (!AppServices.IsInitialized ||
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NOVACLIP_MEDIA_ACCEPTANCE_URL")) || !AppServices.IsInitialized ||
             !Uri.TryCreate(source, UriKind.Absolute, out var uri) ||
             !BrowserNavigationPolicy.IsBilibiliHost(uri.Host) ||
             uri.Scheme is not ("http" or "https") ||
