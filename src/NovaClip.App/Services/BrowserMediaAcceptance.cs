@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using NovaClip.App.Pages;
 using NovaClip.Bilibili;
 using NovaClip.Contracts;
@@ -14,6 +15,7 @@ internal static class BrowserMediaAcceptance
 {
     private static readonly TimeSpan AcceptanceBudget = TimeSpan.FromSeconds(330);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true, WriteIndented = true };
+    private static readonly JsonSerializerOptions MultipartJsonOptions = new(JsonOptions) { NumberHandling = JsonNumberHandling.AllowReadingFromString };
     private const string PlaybackScript = """
         (() => {
           const video = document.querySelector('video');
@@ -43,14 +45,18 @@ internal static class BrowserMediaAcceptance
           const initial = window.__INITIAL_STATE__ || {};
           const next = window.__NEXT_DATA__ && window.__NEXT_DATA__.props && window.__NEXT_DATA__.props.pageProps || {};
           const data = initial.videoData || initial.videoInfo || next.videoData || {};
-          const pages = Array.isArray(data.pages) ? data.pages : [];
+          const pages = Array.isArray(data.pages) ? data.pages.slice(0, 1000) : [];
           const page1 = pages.find(page => Number(page.page) === 1);
           const page2 = pages.find(page => Number(page.page) === 2);
+          const integerText = value => {
+            const number = Number(value);
+            return Number.isSafeInteger(number) && number > 0 ? number.toFixed(0) : null;
+          };
           return {
             bvid: typeof data.bvid === 'string' ? data.bvid : null,
-            aid: Number.isSafeInteger(Number(data.aid)) && Number(data.aid) > 0 ? Number(data.aid) : null,
-            page1Cid: page1 && Number.isSafeInteger(Number(page1.cid)) ? Number(page1.cid) : null,
-            page2Cid: page2 && Number.isSafeInteger(Number(page2.cid)) ? Number(page2.cid) : null
+            aid: integerText(data.aid),
+            page1Cid: page1 ? integerText(page1.cid) : null,
+            page2Cid: page2 ? integerText(page2.cid) : null
           };
         })()
         """;
@@ -137,10 +143,11 @@ internal static class BrowserMediaAcceptance
                 if (SameBvid(secondVideo.Bvid, readyMedia.Bvid) || secondVideo.Cid == initialCid)
                     throw new AcceptanceFailure("SUPPLEMENTAL_REQUIRES_DIFFERENT_VIDEO", blocked: true);
 
-                var evidence = JsonSerializer.Deserialize<MultipartEvidence>(await browser.ExecuteAcceptanceScriptAsync(MultipartEvidenceScript), JsonOptions);
+                Record(report, clock, "MultipartEvidenceRequested", browser.AcceptanceSnapshot, browser.IsMediaCardReady);
+                var evidence = JsonSerializer.Deserialize<MultipartEvidence>(await browser.ExecuteAcceptanceScriptAsync(MultipartEvidenceScript), MultipartJsonOptions);
                 if (!MatchesRequestedMedia(browser.AcceptanceSnapshot.Page, secondVideo, firstPart) ||
                     evidence is null || !SameBvid(evidence.Bvid, secondVideo.Bvid) ||
-                    evidence.Aid != secondVideo.Aid || evidence.Page1Cid != secondVideo.Cid ||
+                    evidence.Aid is null or <= 0 || evidence.Aid != secondVideo.Aid || evidence.Page1Cid != secondVideo.Cid ||
                     evidence.Page2Cid is null or <= 0 || evidence.Page2Cid == evidence.Page1Cid || evidence.Page2Cid == initialCid)
                     throw new AcceptanceFailure("SUPPLEMENTAL_MULTIPART_EVIDENCE_UNAVAILABLE", blocked: true);
                 report.Multipart = evidence;
@@ -195,6 +202,18 @@ internal static class BrowserMediaAcceptance
         {
             report.Status = failure.Blocked ? "blocked" : "failed";
             report.ResultCode = failure.Message;
+        }
+        catch (JsonException exception)
+        {
+            report.Status = "failed";
+            report.ResultCode = "ACCEPTANCE_EXCEPTION_JsonException";
+            // Only schema field names are diagnostic; never retain returned JSON,
+            // exception messages, document contents or arbitrary property paths.
+            report.JsonField = exception.Path switch
+            {
+                "$.bvid" or "$.aid" or "$.page1Cid" or "$.page2Cid" or "$.pageNumber" or "$.currentTime" => exception.Path,
+                _ => "other"
+            };
         }
         catch (Exception exception)
         {
@@ -409,6 +428,7 @@ internal static class BrowserMediaAcceptance
         public string? OutputSha256 { get; set; }
         public string? DownloadDirectoryRelative { get; set; }
         public string? CleanupCode { get; set; }
+        public string? JsonField { get; set; }
     }
 
     private sealed record PlaybackEvidence(string Path, int PageNumber, string DocumentState, bool HasVideo, bool Paused, int ReadyState, double CurrentTime, int? ErrorCode, string? PlayAttemptError);

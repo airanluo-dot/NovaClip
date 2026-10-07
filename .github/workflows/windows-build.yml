@@ -167,7 +167,31 @@ jobs:
           $version = "${{ steps.version.outputs.version }}"
           $assemblyVersion = "${{ steps.version.outputs.assemblyVersion }}"
           $runtimeIdentifier = "${{ steps.version.outputs.runtimeIdentifier }}"
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DProductVersion=$assemblyVersion" "/DDisplayVersion=$version" "/DOutputBaseFilename=NovaClip-$version-$runtimeIdentifier-setup" "/DPublishDir=${{ github.workspace }}\publish\$runtimeIdentifier" "/DOutputDir=${{ github.workspace }}\artifacts\windows" installer\NovaClip.iss
+          # Use the already verified portable staging tree, not the runtime tree
+          # where smoke captures and real acceptance downloads are produced.
+          $packageSource = Join-Path "${{ github.workspace }}" "artifacts\windows\NovaClip-$version-$runtimeIdentifier-portable"
+          if (-not (Test-Path (Join-Path $packageSource "novaclip-package-manifest.json"))) { throw "INSTALLER_VERIFIED_SOURCE_MISSING" }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DProductVersion=$assemblyVersion" "/DDisplayVersion=$version" "/DOutputBaseFilename=NovaClip-$version-$runtimeIdentifier-setup" "/DPublishDir=$packageSource" "/DOutputDir=${{ github.workspace }}\artifacts\windows" installer\NovaClip.iss
+          if ($LASTEXITCODE -ne 0) { throw "INSTALLER_BUILD_FAILED" }
+      - name: Verify installed package matches portable payload
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $runtimeIdentifier = "${{ steps.version.outputs.runtimeIdentifier }}"
+          $packageSource = Join-Path "${{ github.workspace }}" "artifacts\windows\NovaClip-$version-$runtimeIdentifier-portable"
+          $setup = Join-Path "${{ github.workspace }}" "artifacts\windows\NovaClip-$version-$runtimeIdentifier-setup.exe"
+          $installedRoot = Join-Path $env:RUNNER_TEMP "NovaClip-installed-${{ github.sha }}"
+          $installation = Start-Process $setup -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/NOICONS', '/TASKS=', "/DIR=`"$installedRoot`"") -Wait -PassThru
+          if ($installation.ExitCode -ne 0) { throw "INSTALLER_INSTALL_FAILED" }
+          if (Test-Path (Join-Path $installedRoot "portable.marker")) { throw "INSTALLER_CONTAINS_PORTABLE_MARKER" }
+          if (Test-Path (Join-Path $installedRoot "novaclip-package-manifest.json")) { throw "INSTALLER_CONTAINS_PORTABLE_MANIFEST" }
+          if (Test-Path (Join-Path $installedRoot "media-acceptance")) { throw "INSTALLER_CONTAINS_ACCEPTANCE_OUTPUT" }
+          $manifest = Get-Content (Join-Path $packageSource "novaclip-package-manifest.json") -Raw | ConvertFrom-Json
+          foreach ($file in $manifest.files | Where-Object { $_.path -ne "portable.marker" }) {
+            $path = Join-Path $installedRoot ($file.path -replace '/', '\')
+            if (-not (Test-Path $path)) { throw "INSTALLER_PAYLOAD_FILE_MISSING:" + $file.path }
+            if ((Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.sha256) { throw "INSTALLER_PAYLOAD_HASH_MISMATCH:" + $file.path }
+          }
       - name: Hash deliverables
         shell: pwsh
         run: |
@@ -223,10 +247,62 @@ jobs:
           name: NovaClip-${{ needs.build.outputs.runtime_identifier }}-${{ github.sha }}
           path: release-assets
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        id: prerelease_draft
         with:
+          draft: true
           prerelease: true
           tag_name: v${{ needs.build.outputs.version }}
           target_commitish: ${{ github.sha }}
           name: NovaClip v${{ needs.build.outputs.version }}
           generate_release_notes: true
-          files: release-assets/*
+          files: |
+            release-assets/*.zip
+            release-assets/SHA256SUMS.txt
+            release-assets/novaclip-build.json
+      - name: Upload compatible setup asset and publish complete prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_RUNTIME_IDENTIFIER: ${{ needs.build.outputs.runtime_identifier }}
+          RELEASE_DRAFT_ID: ${{ steps.prerelease_draft.outputs.id }}
+        run: |
+          set -euo pipefail
+          release_id="$RELEASE_DRAFT_ID"
+          [[ "$release_id" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/novaclip-release-metadata.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'novaclip-release-metadata.json').read_text())
+          assert release['draft'] and release['tag_name'] == 'v' + os.environ['RELEASE_VERSION'], 'RELEASE_IDENTITY_INVALID'
+          assert release['target_commitish'] == os.environ['GITHUB_SHA'], 'RELEASE_COMMIT_MISMATCH'
+          PY
+          setup_name="NovaClip-$RELEASE_VERSION-$RELEASE_RUNTIME_IDENTIFIER-setup.exe"
+          # beta.8 setup updates accept octet-stream; publish this MIME on the
+          # first upload so existing installed clients can select the new setup.
+          gh api --method POST "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$setup_name" --header 'Content-Type: application/octet-stream' --input "release-assets/$setup_name" --jq '.browser_download_url'
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/novaclip-release-metadata.json"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'novaclip-release-metadata.json').read_text())
+          build = json.loads(Path('release-assets/novaclip-build.json').read_text(encoding='utf-8-sig'))
+          assert release['draft'] and release['tag_name'] == 'v' + os.environ['RELEASE_VERSION'], 'RELEASE_IDENTITY_INVALID'
+          assert release['target_commitish'] == os.environ['GITHUB_SHA'] == build['commit'], 'RELEASE_COMMIT_MISMATCH'
+          assert build['version'] == os.environ['RELEASE_VERSION'] and build['runtimeIdentifier'] == os.environ['RELEASE_RUNTIME_IDENTIFIER'], 'RELEASE_VERSION_MISMATCH'
+          assets = {asset['name']: asset for asset in release['assets']}
+          packages = build['packages']
+          assert len(packages) == 2 and len(release['assets']) == len(assets) == 4, 'RELEASE_ASSET_SET_INVALID'
+          assert set(assets) == {package['name'] for package in packages} | {'SHA256SUMS.txt', 'novaclip-build.json'}, 'RELEASE_ASSET_SET_INVALID'
+          for package in packages:
+              path = Path('release-assets') / package['name']
+              with path.open('rb') as stream:
+                  digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+              asset = assets[package['name']]
+              assert path.stat().st_size == package['size'] == asset['size'] and package['size'] > 0, 'RELEASE_ASSET_SIZE_MISMATCH'
+              assert digest == package['sha256'] and asset['digest'] == 'sha256:' + digest, 'RELEASE_ASSET_DIGEST_MISMATCH'
+              expected_type = 'application/octet-stream' if package['name'].endswith('-setup.exe') else 'application/zip'
+              assert asset['content_type'] == expected_type, 'RELEASE_ASSET_TYPE_MISMATCH'
+          print('Release commit, version, asset set, sizes, MIME and SHA-256 verified')
+          PY
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -F prerelease=true --jq '.html_url'
