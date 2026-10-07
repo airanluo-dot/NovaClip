@@ -11,6 +11,7 @@ namespace NovaClip.App;
 // It records identities and state codes, never media URLs, cookies or page HTML.
 internal static class BrowserMediaAcceptance
 {
+    private static readonly TimeSpan AcceptanceBudget = TimeSpan.FromSeconds(330);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true, WriteIndented = true };
     private const string PlaybackScript = """
         (() => {
@@ -65,6 +66,14 @@ internal static class BrowserMediaAcceptance
             AppServices.Settings.MergeAfterDownload = true;
             AppServices.Settings.DeleteTemporaryFilesAfterMerge = true;
             AppServices.Settings.MaxRetryAttempts = 2;
+            var ffmpegPath = Environment.GetEnvironmentVariable("NOVACLIP_MEDIA_ACCEPTANCE_FFMPEG");
+            if (!string.IsNullOrWhiteSpace(ffmpegPath))
+            {
+                if (!Path.IsPathRooted(ffmpegPath) || !File.Exists(ffmpegPath))
+                    throw new AcceptanceFailure("ACCEPTANCE_FFMPEG_CONFIG_INVALID", blocked: true);
+                AppServices.Settings.FfmpegPath = ffmpegPath;
+                report.FfmpegExplicitlyConfigured = true;
+            }
 
             var initializationDeadline = clock.Elapsed + TimeSpan.FromSeconds(25);
             while (!browser.IsPageBridgeReady && clock.Elapsed < initializationDeadline)
@@ -73,48 +82,7 @@ internal static class BrowserMediaAcceptance
 
             browser.NavigateAddress(uri.ToString());
             Record(report, clock, "AddressBarNavigation", browser.AcceptanceSnapshot);
-            var detectionDeadline = clock.Elapsed + TimeSpan.FromSeconds(75);
-            double? previousTime = null;
-            var playbackObserved = false;
-            MediaDescriptor? readyMedia = null;
-            string? previousStateKey = null;
-            while (clock.Elapsed < detectionDeadline)
-            {
-                var playback = JsonSerializer.Deserialize<PlaybackEvidence>(
-                    await browser.ExecuteAcceptanceScriptAsync(PlaybackScript),
-                    JsonOptions);
-                var snapshot = browser.AcceptanceSnapshot;
-                var stateKey = $"{snapshot.State}:{snapshot.Page?.NavigationGeneration}:{snapshot.Page?.Bvid}:{snapshot.Page?.Cid}:{snapshot.ErrorCode}:{browser.IsMediaCardReady}";
-                if (stateKey != previousStateKey)
-                {
-                    Record(report, clock, "DetectionState", snapshot, browser.IsMediaCardReady);
-                    previousStateKey = stateKey;
-                }
-
-                if (playback is not null && IsRequestedPlayback(playback, uri, snapshot.Page))
-                {
-                    report.Playback = playback;
-                    if (!playback.Paused && previousTime is double time && playback.CurrentTime > time + 0.2)
-                        playbackObserved = true;
-                    previousTime = playback.CurrentTime;
-                }
-
-                if (snapshot.State == MediaDetectionState.Ready && snapshot.Media is MediaDescriptor media &&
-                    browser.IsMediaCardReady && MatchesRequestedMedia(snapshot.Page, media, uri))
-                    readyMedia = media;
-                else
-                    readyMedia = null;
-
-                if (playbackObserved && readyMedia is not null) break;
-                var beforeDelay = clock.Elapsed;
-                await Task.Delay(500);
-                report.UiProbeDelayOverrunsMs.Add(Math.Max(0, (clock.Elapsed - beforeDelay).TotalMilliseconds - 500));
-            }
-
-            report.PlaybackObserved = playbackObserved;
-            report.FinalDetection = SafeSnapshot(browser.AcceptanceSnapshot, browser.IsMediaCardReady);
-            if (!playbackObserved) throw new AcceptanceFailure("REAL_PLAYBACK_NOT_OBSERVED", blocked: true);
-            if (readyMedia is null) throw new AcceptanceFailure("PLAYBACK_OBSERVED_MEDIA_NOT_READY");
+            var readyMedia = await WaitForReadyPlaybackAsync(browser, uri, report, clock, "Initial", TimeSpan.FromSeconds(75));
             report.DetectionElapsedMs = clock.Elapsed.TotalMilliseconds;
             report.Media = new MediaEvidence(
                 readyMedia.Bvid, readyMedia.Aid, readyMedia.Cid, readyMedia.Source.ToString(),
@@ -124,10 +92,30 @@ internal static class BrowserMediaAcceptance
                 readyMedia.Tracks.Where(track => track.Type == TrackType.Video).Select(track => track.QualityId).Distinct().ToArray());
             if (!AppServices.Ffmpeg.IsAvailable) throw new AcceptanceFailure("ACCEPTANCE_FFMPEG_UNAVAILABLE", blocked: true);
 
+            var initialCid = readyMedia.Cid;
+            var generation = browser.AcceptanceSnapshot.Page?.NavigationGeneration ?? 0;
+            browser.Reload();
+            readyMedia = await WaitForReadyPlaybackAsync(browser, uri, report, clock, "Refresh", TimeSpan.FromSeconds(35), generation);
+            if (readyMedia.Cid != initialCid) throw new AcceptanceFailure("REFRESH_MEDIA_IDENTITY_CHANGED");
+
+            // Establish a known history entry rather than depending on the user's
+            // startup preference. Each home visit must clear the old media card.
+            browser.NavigateAddress("https://www.bilibili.com/");
+            await WaitForHomeAsync(browser, report, clock, "Home");
+            generation = browser.AcceptanceSnapshot.Page?.NavigationGeneration ?? 0;
+            browser.GoBack();
+            readyMedia = await WaitForReadyPlaybackAsync(browser, uri, report, clock, "Back", TimeSpan.FromSeconds(35), generation);
+            browser.GoForward();
+            await WaitForHomeAsync(browser, report, clock, "Forward");
+            generation = browser.AcceptanceSnapshot.Page?.NavigationGeneration ?? 0;
+            browser.GoBack();
+            readyMedia = await WaitForReadyPlaybackAsync(browser, uri, report, clock, "ReturnToDownload", TimeSpan.FromSeconds(35), generation);
+            if (readyMedia.Cid != initialCid) throw new AcceptanceFailure("HISTORY_MEDIA_IDENTITY_CHANGED");
+
             browser.SelectLowestAcceptanceQuality();
             downloadId = await browser.EnqueueCurrentMediaAsync();
             if (downloadId is null) throw new AcceptanceFailure("MEDIA_UI_ENQUEUE_REJECTED");
-            var downloadDeadline = clock.Elapsed + TimeSpan.FromMinutes(4);
+            var downloadDeadline = Deadline(clock, TimeSpan.FromMinutes(4));
             DownloadTaskSnapshot? task = null;
             DownloadTaskState? previousDownloadState = null;
             while (clock.Elapsed < downloadDeadline)
@@ -163,7 +151,7 @@ internal static class BrowserMediaAcceptance
         }
         finally
         {
-            report.FinalDetection ??= SafeSnapshot(browser.AcceptanceSnapshot, browser.IsMediaCardReady);
+            report.FinalDetection = SafeSnapshot(browser.AcceptanceSnapshot, browser.IsMediaCardReady);
             if (downloadId is Guid id)
             {
                 var task = AppServices.Downloads.GetTasks().FirstOrDefault(candidate => candidate.Id == id);
@@ -188,6 +176,81 @@ internal static class BrowserMediaAcceptance
             StartupDiagnostics.Info($"MediaAcceptance.Completed:{report.Status}:{report.ResultCode}");
         }
     }
+
+    private static async Task<MediaDescriptor> WaitForReadyPlaybackAsync(BrowserPage browser, Uri uri, AcceptanceReport report,
+        Stopwatch clock, string phase, TimeSpan budget, long? afterGeneration = null)
+    {
+        var deadline = Deadline(clock, budget);
+        double? previousTime = null;
+        var playbackObserved = false;
+        MediaDescriptor? readyMedia = null;
+        string? previousStateKey = null;
+        while (clock.Elapsed < deadline)
+        {
+            var snapshot = browser.AcceptanceSnapshot;
+            var stateKey = $"{snapshot.State}:{snapshot.Page?.NavigationGeneration}:{snapshot.Page?.Bvid}:{snapshot.Page?.Cid}:{snapshot.ErrorCode}:{browser.IsMediaCardReady}";
+            if (stateKey != previousStateKey)
+            {
+                Record(report, clock, phase + "DetectionState", snapshot, browser.IsMediaCardReady);
+                previousStateKey = stateKey;
+            }
+            if (browser.IsPageBridgeReady && (afterGeneration is null || snapshot.Page?.NavigationGeneration > afterGeneration))
+            {
+                var playback = JsonSerializer.Deserialize<PlaybackEvidence>(await browser.ExecuteAcceptanceScriptAsync(PlaybackScript), JsonOptions);
+                snapshot = browser.AcceptanceSnapshot;
+                if (playback is not null && IsRequestedPlayback(playback, uri, snapshot.Page))
+                {
+                    report.Playback = playback;
+                    if (!playback.Paused && previousTime is double time && playback.CurrentTime > time + 0.2)
+                        playbackObserved = true;
+                    previousTime = playback.CurrentTime;
+                }
+                if (snapshot.State == MediaDetectionState.Ready && snapshot.Media is MediaDescriptor media &&
+                    browser.IsMediaCardReady && MatchesRequestedMedia(snapshot.Page, media, uri))
+                    readyMedia = media;
+                else readyMedia = null;
+                if (playbackObserved && readyMedia is not null)
+                {
+                    report.PlaybackObserved = true;
+                    report.NavigationChecks.Add(new NavigationEvidence(phase, true, true, snapshot.Page?.NavigationGeneration, readyMedia.Cid));
+                    return readyMedia;
+                }
+            }
+            var beforeDelay = clock.Elapsed;
+            await Task.Delay(500);
+            report.UiProbeDelayOverrunsMs.Add(Math.Max(0, (clock.Elapsed - beforeDelay).TotalMilliseconds - 500));
+        }
+        report.PlaybackObserved |= playbackObserved;
+        report.NavigationChecks.Add(new NavigationEvidence(phase, playbackObserved, false, browser.AcceptanceSnapshot.Page?.NavigationGeneration, browser.AcceptanceSnapshot.Page?.Cid));
+        if (!playbackObserved) throw new AcceptanceFailure(phase + "_REAL_PLAYBACK_NOT_OBSERVED", blocked: true);
+        throw new AcceptanceFailure(phase + "_PLAYBACK_OBSERVED_MEDIA_NOT_READY");
+    }
+
+    private static async Task WaitForHomeAsync(BrowserPage browser, AcceptanceReport report, Stopwatch clock, string phase)
+    {
+        var deadline = Deadline(clock, TimeSpan.FromSeconds(25));
+        while (clock.Elapsed < deadline)
+        {
+            var snapshot = browser.AcceptanceSnapshot;
+            if (browser.IsPageBridgeReady && snapshot.Page is not null &&
+                Uri.TryCreate(snapshot.Page.PageUrl, UriKind.Absolute, out var page) && page.AbsolutePath == "/" &&
+                snapshot.State != MediaDetectionState.Ready && !browser.IsMediaCardReady)
+            {
+                var playback = JsonSerializer.Deserialize<PlaybackEvidence>(await browser.ExecuteAcceptanceScriptAsync(PlaybackScript), JsonOptions);
+                if (playback?.Path == "/")
+                {
+                    Record(report, clock, phase + "ClearedMedia", snapshot);
+                    report.NavigationChecks.Add(new NavigationEvidence(phase, false, true, snapshot.Page.NavigationGeneration, snapshot.Page.Cid));
+                    return;
+                }
+            }
+            await Task.Delay(250);
+        }
+        throw new AcceptanceFailure(phase + "_HOME_MEDIA_DID_NOT_CLEAR");
+    }
+
+    private static TimeSpan Deadline(Stopwatch clock, TimeSpan duration) =>
+        TimeSpan.FromTicks(Math.Min((clock.Elapsed + duration).Ticks, AcceptanceBudget.Ticks));
 
     private static Uri ValidateVideoUri(string input)
     {
@@ -256,6 +319,7 @@ internal static class BrowserMediaAcceptance
         public string? BuildCommit { get; set; }
         public string BuildCommitSource { get; } = "WorkflowDeclared";
         public bool BaselineHarnessOverlay { get; set; }
+        public bool FfmpegExplicitlyConfigured { get; set; }
         public DateTimeOffset StartedAt { get; set; }
         public DateTimeOffset CompletedAt { get; set; }
         public string? PagePath { get; set; }
@@ -267,6 +331,7 @@ internal static class BrowserMediaAcceptance
         public DetectionEvidence? FinalDetection { get; set; }
         public MediaEvidence? Media { get; set; }
         public List<AcceptanceEvent> Events { get; } = [];
+        public List<NavigationEvidence> NavigationChecks { get; } = [];
         public List<double> UiProbeDelayOverrunsMs { get; } = [];
         public double? DetectionElapsedMs { get; set; }
         public double ElapsedMs { get; set; }
@@ -282,5 +347,6 @@ internal static class BrowserMediaAcceptance
     private sealed record DiagnosticEvidence(string EventCode, string State, DateTimeOffset Timestamp);
     private sealed record DetectionEvidence(string State, long? Generation, string? Bvid, long? Aid, long? Cid, int? PageNumber, bool CardReady, string? ErrorCode, DiagnosticEvidence[] Diagnostics);
     private sealed record MediaEvidence(string? Bvid, long? Aid, long? Cid, string Source, int VideoTracks, int AudioTracks, int LegacySegments, int?[] Qualities);
+    private sealed record NavigationEvidence(string Phase, bool PlaybackObserved, bool Converged, long? Generation, long? Cid);
     private sealed record AcceptanceEvent(double ElapsedMs, string Phase, string State, long? Generation = null, string? Bvid = null, long? Cid = null, bool CardReady = false, string? ErrorCode = null);
 }

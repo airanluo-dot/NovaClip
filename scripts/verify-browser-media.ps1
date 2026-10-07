@@ -14,6 +14,7 @@ if (Test-Path $resultPath) { Remove-Item $resultPath -Force }
 $env:NOVACLIP_MEDIA_ACCEPTANCE_URL = $VideoUrl
 $env:NOVACLIP_BUILD_COMMIT = $BuildCommit
 $env:NOVACLIP_ACCEPTANCE_BASELINE = if ($BaselineHarnessOverlay) { "1" } else { "0" }
+$env:NOVACLIP_MEDIA_ACCEPTANCE_FFMPEG = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
 # The acceptance runner emits only bounded public identity/state evidence. It uses
 # real playback, WebView2 observations and the same UI enqueue command; no fixture.
 $process = Start-Process $exe -PassThru
@@ -56,4 +57,5 @@ try {
     Remove-Item Env:NOVACLIP_MEDIA_ACCEPTANCE_URL -ErrorAction SilentlyContinue
     Remove-Item Env:NOVACLIP_BUILD_COMMIT -ErrorAction SilentlyContinue
     Remove-Item Env:NOVACLIP_ACCEPTANCE_BASELINE -ErrorAction SilentlyContinue
+    Remove-Item Env:NOVACLIP_MEDIA_ACCEPTANCE_FFMPEG -ErrorAction SilentlyContinue
 }
