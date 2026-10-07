@@ -19,8 +19,9 @@ The Windows workflow performs all of these steps before a prerelease is publishe
 4. Publish self-contained application and updater output using `version.props`.
 5. Verify `resources.pri`, `NovaClip.exe`, package manifest hashes, version and runtime identity.
 6. Launch the actual published executable and require `App.StartupCompleted`, `Shell.Ready`, every top-level page marker and `WebView2.Ready`.
-7. Build the Inno Setup installer, hash deliverables and upload the ZIP/installer.
-8. On the exact version tag, hash the deliverables, upload the ZIP/installer, and publish the prerelease only after the Windows gate is green.
+7. For publication, exercise real embedded playback, a matching media card and an actual completed download, then verify its streams with ffprobe.
+8. Build the Inno Setup installer, hash the ZIP/installer and write commit/version provenance.
+9. On the exact version tag or authorized version publication branch matching main, publish a new prerelease only after all Windows gates pass; refuse replacement of an existing release.
 
 ## Windows real-device acceptance
 
@@ -33,6 +34,14 @@ The same short sample is refreshed and traversed through Home/back/forward/back;
 home must clear the card and each return must converge to the original CID in a
 new navigation generation. Only the final visit creates a download task. All
 phases share one fixed acceptance deadline.
+An optional `media_acceptance_multipart_url` adds one second permitted public
+multipart video. The runner observes its p1 playback and card, then reads only
+BV/AID and the first two public page CIDs from the current document. The p2
+visit must match that exact second CID, differ from p1 and the primary video,
+and show advancing playback with a usable card. A rapid primary/p2/primary
+return must restore the primary CID before the single final download. BV suffix
+comparison remains case sensitive. If the second sample is unavailable or its
+page evidence is missing, acceptance reports the gap and does not pass.
 The task must reach Completed and FFprobe must find the expected video/audio
 streams in the SHA-256-matched final output. Only bounded public identities,
 state codes, playback time and process measurements are uploaded; cookies,

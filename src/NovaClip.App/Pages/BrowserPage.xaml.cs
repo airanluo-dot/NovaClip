@@ -34,6 +34,8 @@ public sealed partial class BrowserPage : Page, IDisposable
     private Task? _initializationTask;
     private Uri? _pendingNavigationUri;
     private bool _isLoading;
+    private ulong _activeNavigationId;
+    private Uri? _navigationTargetUri;
 
     public static BrowserPage? Current { get; private set; }
     public static BrowserPage? Instance { get; private set; }
@@ -207,6 +209,8 @@ public sealed partial class BrowserPage : Page, IDisposable
             return;
         }
 
+        _activeNavigationId = args.NavigationId;
+        _navigationTargetUri = uri;
         _bridgeDocumentId = null;
         _mediaSession.BeginNavigation(uri);
         ScheduleDetectionSettlement();
@@ -217,16 +221,38 @@ public sealed partial class BrowserPage : Page, IDisposable
 
     private void Core_NavigationCompleted(CoreWebView2 sender, CoreWebView2NavigationCompletedEventArgs args)
     {
+        if (_closed || args.NavigationId != _activeNavigationId) return;
+        _navigationTargetUri = null;
         SetLoading(false);
         if (args.IsSuccess)
         {
             PersistLastPage(sender.Source);
             _ = ProbePageMediaAsync(sender);
         }
-        else if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+        else
         {
-            ShowError("BROWSER_NAVIGATION_FAILED", args.WebErrorStatus.ToString());
+            RestoreCurrentPageAfterNavigationFailure(sender);
+            if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+                ShowError("BROWSER_NAVIGATION_FAILED", args.WebErrorStatus.ToString());
         }
+    }
+
+    private void RestoreCurrentPageAfterNavigationFailure(CoreWebView2 sender)
+    {
+        if (!Uri.TryCreate(sender.Source, UriKind.Absolute, out var source) ||
+            _policy.Evaluate(source, BrowserNavigationKind.Script) != BrowserNavigationDecision.NavigateInCurrentView) return;
+
+        Uri.TryCreate(_detector.Snapshot.Page?.PageUrl, UriKind.Absolute, out var authoritativePage);
+        if (BrowserPageContextGate.RequiresPageRestore(source, authoritativePage))
+        {
+            // A canceled or failed request can leave the outgoing document alive.
+            // Restore the actual Source, rather than keep rejecting it as the target.
+            _mediaSession.UpdatePageContext(new PageIdentity(source.ToString(), null, null, null, null, 0));
+            ScheduleDetectionSettlement();
+        }
+        // NavigationStarting cleared the nonce even for a canceled same-page reload.
+        // Re-handshake with the surviving document and replay its bounded evidence.
+        _ = ProbePageMediaAsync(sender);
     }
 
     private static void PersistLastPage(string? source)
@@ -258,6 +284,8 @@ public sealed partial class BrowserPage : Page, IDisposable
         if (AddressBox.Text != sender.Source) AddressBox.Text = sender.Source;
         if (!Uri.TryCreate(sender.Source, UriKind.Absolute, out var uri) ||
             !BrowserNavigationPolicy.IsBilibiliHost(uri.Host)) return;
+        if (!BrowserPageContextGate.AcceptsSource(uri, _navigationTargetUri)) return;
+        if (args.IsNewDocument) _navigationTargetUri = null;
         var previousGeneration = _detector.Snapshot.Page?.NavigationGeneration;
         var generation = _mediaSession.UpdatePageContext(new PageIdentity(sender.Source, null, null, null, null, 0));
         if (generation != previousGeneration)
@@ -784,11 +812,11 @@ public sealed partial class BrowserPage : Page, IDisposable
         // Source may still name the outgoing document between NavigationStarting
         // and SourceChanged. Its messages must not turn the intended new page back
         // into that old video; the current URI and the navigation target both apply.
-        var expectedUrl = _detector.Snapshot.Page?.PageUrl;
+        var expectedUrl = _navigationTargetUri?.ToString() ?? _detector.Snapshot.Page?.PageUrl;
+        Uri? expectedUri = null;
+        if (expectedUrl is not null && !Uri.TryCreate(expectedUrl, UriKind.Absolute, out expectedUri)) return false;
         return BrowserNavigationPolicy.IsBilibiliHost(contextUri.Host) &&
-            BilibiliMediaIdentity.IsSamePage(contextUri, currentUri) &&
-            (expectedUrl is null || Uri.TryCreate(expectedUrl, UriKind.Absolute, out var expectedUri) &&
-                BilibiliMediaIdentity.IsSamePage(contextUri, expectedUri));
+            BrowserPageContextGate.AcceptsContext(contextUri, currentUri, expectedUri);
     }
 
     private static async Task<string?> ReadBoundedTextAsync(Stream stream, int maxCharacters, CancellationToken cancellationToken)

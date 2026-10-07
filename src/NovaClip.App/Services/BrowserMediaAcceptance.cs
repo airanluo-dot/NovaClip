@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using NovaClip.App.Pages;
+using NovaClip.Bilibili;
 using NovaClip.Contracts;
 using NovaClip.Core;
 
@@ -34,6 +35,22 @@ internal static class BrowserMediaAcceptance
             currentTime: video && Number.isFinite(video.currentTime) ? video.currentTime : 0,
             errorCode: video && video.error ? video.error.code : null,
             playAttemptError: window.__novaClipAcceptancePlayError || null
+          };
+        })()
+        """;
+    private const string MultipartEvidenceScript = """
+        (() => {
+          const initial = window.__INITIAL_STATE__ || {};
+          const next = window.__NEXT_DATA__ && window.__NEXT_DATA__.props && window.__NEXT_DATA__.props.pageProps || {};
+          const data = initial.videoData || initial.videoInfo || next.videoData || {};
+          const pages = Array.isArray(data.pages) ? data.pages : [];
+          const page1 = pages.find(page => Number(page.page) === 1);
+          const page2 = pages.find(page => Number(page.page) === 2);
+          return {
+            bvid: typeof data.bvid === 'string' ? data.bvid : null,
+            aid: Number.isSafeInteger(Number(data.aid)) && Number(data.aid) > 0 ? Number(data.aid) : null,
+            page1Cid: page1 && Number.isSafeInteger(Number(page1.cid)) ? Number(page1.cid) : null,
+            page2Cid: page2 && Number.isSafeInteger(Number(page2.cid)) ? Number(page2.cid) : null
           };
         })()
         """;
@@ -84,12 +101,8 @@ internal static class BrowserMediaAcceptance
             Record(report, clock, "AddressBarNavigation", browser.AcceptanceSnapshot);
             var readyMedia = await WaitForReadyPlaybackAsync(browser, uri, report, clock, "Initial", TimeSpan.FromSeconds(75));
             report.DetectionElapsedMs = clock.Elapsed.TotalMilliseconds;
-            report.Media = new MediaEvidence(
-                readyMedia.Bvid, readyMedia.Aid, readyMedia.Cid, readyMedia.Source.ToString(),
-                readyMedia.Tracks.Count(track => track.Type == TrackType.Video),
-                readyMedia.Tracks.Count(track => track.Type == TrackType.Audio),
-                readyMedia.LegacySegments.Count,
-                readyMedia.Tracks.Where(track => track.Type == TrackType.Video).Select(track => track.QualityId).Distinct().ToArray());
+            report.Media = SafeMedia(readyMedia);
+            report.InitialMedia = report.Media;
             if (!AppServices.Ffmpeg.IsAvailable) throw new AcceptanceFailure("ACCEPTANCE_FFMPEG_UNAVAILABLE", blocked: true);
 
             var initialCid = readyMedia.Cid;
@@ -112,6 +125,45 @@ internal static class BrowserMediaAcceptance
             readyMedia = await WaitForReadyPlaybackAsync(browser, uri, report, clock, "ReturnToDownload", TimeSpan.FromSeconds(35), generation);
             if (readyMedia.Cid != initialCid) throw new AcceptanceFailure("HISTORY_MEDIA_IDENTITY_CHANGED");
 
+            if (Environment.GetEnvironmentVariable("NOVACLIP_MEDIA_ACCEPTANCE_MULTIPART_URL") is { Length: > 0 } multipartInput)
+            {
+                report.SupplementalStatus = "running";
+                var multipart = ValidateVideoUri(multipartInput);
+                var firstPart = new UriBuilder(multipart) { Query = "p=1" }.Uri;
+                report.SupplementalPagePath = firstPart.AbsolutePath;
+                generation = browser.AcceptanceSnapshot.Page?.NavigationGeneration ?? 0;
+                browser.NavigateAddress(firstPart.ToString());
+                var secondVideo = await WaitForReadyPlaybackAsync(browser, firstPart, report, clock, "SecondVideo", TimeSpan.FromSeconds(35), generation);
+                if (SameBvid(secondVideo.Bvid, readyMedia.Bvid) || secondVideo.Cid == initialCid)
+                    throw new AcceptanceFailure("SUPPLEMENTAL_REQUIRES_DIFFERENT_VIDEO", blocked: true);
+
+                var evidence = JsonSerializer.Deserialize<MultipartEvidence>(await browser.ExecuteAcceptanceScriptAsync(MultipartEvidenceScript), JsonOptions);
+                if (!MatchesRequestedMedia(browser.AcceptanceSnapshot.Page, secondVideo, firstPart) ||
+                    evidence is null || !SameBvid(evidence.Bvid, secondVideo.Bvid) ||
+                    evidence.Aid != secondVideo.Aid || evidence.Page1Cid != secondVideo.Cid ||
+                    evidence.Page2Cid is null or <= 0 || evidence.Page2Cid == evidence.Page1Cid || evidence.Page2Cid == initialCid)
+                    throw new AcceptanceFailure("SUPPLEMENTAL_MULTIPART_EVIDENCE_UNAVAILABLE", blocked: true);
+                report.Multipart = evidence;
+                var secondPart = new UriBuilder(firstPart) { Query = "p=2" }.Uri;
+                generation = browser.AcceptanceSnapshot.Page?.NavigationGeneration ?? 0;
+                browser.NavigateAddress(secondPart.ToString());
+                var partMedia = await WaitForReadyPlaybackAsync(browser, secondPart, report, clock, "PartSwitch", TimeSpan.FromSeconds(35), generation);
+                if (!SameBvid(partMedia.Bvid, secondVideo.Bvid) ||
+                    partMedia.Aid != secondVideo.Aid || partMedia.Cid != evidence.Page2Cid)
+                    throw new AcceptanceFailure("SUPPLEMENTAL_PART_MEDIA_IDENTITY_MISMATCH");
+
+                generation = browser.AcceptanceSnapshot.Page?.NavigationGeneration ?? 0;
+                browser.NavigateAddress(uri.ToString());
+                browser.NavigateAddress(secondPart.ToString());
+                browser.NavigateAddress(uri.ToString());
+                readyMedia = await WaitForReadyPlaybackAsync(browser, uri, report, clock, "RapidReturnPrimary", TimeSpan.FromSeconds(35), generation);
+                if (readyMedia.Cid != initialCid) throw new AcceptanceFailure("RAPID_RETURN_MEDIA_IDENTITY_MISMATCH");
+                report.SupplementalStatus = "passed";
+            }
+
+            // FFprobe expectations must describe the actual card being enqueued,
+            // including after an optional second-video/part switch.
+            report.Media = SafeMedia(readyMedia);
             browser.SelectLowestAcceptanceQuality();
             downloadId = await browser.EnqueueCurrentMediaAsync();
             if (downloadId is null) throw new AcceptanceFailure("MEDIA_UI_ENQUEUE_REJECTED");
@@ -212,7 +264,7 @@ internal static class BrowserMediaAcceptance
                 if (playbackObserved && readyMedia is not null)
                 {
                     report.PlaybackObserved = true;
-                    report.NavigationChecks.Add(new NavigationEvidence(phase, true, true, snapshot.Page?.NavigationGeneration, readyMedia.Cid));
+                    report.NavigationChecks.Add(new NavigationEvidence(phase, true, true, snapshot.Page?.NavigationGeneration, readyMedia.Cid, readyMedia.Bvid, GetPageNumber(uri)));
                     return readyMedia;
                 }
             }
@@ -221,7 +273,8 @@ internal static class BrowserMediaAcceptance
             report.UiProbeDelayOverrunsMs.Add(Math.Max(0, (clock.Elapsed - beforeDelay).TotalMilliseconds - 500));
         }
         report.PlaybackObserved |= playbackObserved;
-        report.NavigationChecks.Add(new NavigationEvidence(phase, playbackObserved, false, browser.AcceptanceSnapshot.Page?.NavigationGeneration, browser.AcceptanceSnapshot.Page?.Cid));
+        report.NavigationChecks.Add(new NavigationEvidence(phase, playbackObserved, false, browser.AcceptanceSnapshot.Page?.NavigationGeneration, browser.AcceptanceSnapshot.Page?.Cid,
+            browser.AcceptanceSnapshot.Page?.Bvid, GetPageNumber(uri)));
         if (!playbackObserved) throw new AcceptanceFailure(phase + "_REAL_PLAYBACK_NOT_OBSERVED", blocked: true);
         throw new AcceptanceFailure(phase + "_PLAYBACK_OBSERVED_MEDIA_NOT_READY");
     }
@@ -276,13 +329,14 @@ internal static class BrowserMediaAcceptance
     private static bool IsRequestedPlayback(PlaybackEvidence evidence, Uri requested, PageIdentity? page)
     {
         if (evidence.PageNumber != GetPageNumber(requested) || !evidence.HasVideo) return false;
-        if (string.Equals(evidence.Path.TrimEnd('/'), requested.AbsolutePath.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)) return true;
+        var actual = new UriBuilder(requested) { Path = evidence.Path, Query = "p=" + evidence.PageNumber }.Uri;
+        if (BilibiliMediaIdentity.IsSamePage(actual, requested)) return true;
         var id = requested.AbsolutePath.TrimEnd('/').Split('/')[^1];
         // Bilibili can canonicalize an AV address to BV. Match its trusted current
         // page AID as well as the actual playback path, rather than rejecting the redirect.
         return id.StartsWith("av", StringComparison.OrdinalIgnoreCase) && long.TryParse(id[2..], out var aid) &&
             page?.Aid == aid && Uri.TryCreate(page.PageUrl, UriKind.Absolute, out var canonical) &&
-            string.Equals(canonical.AbsolutePath.TrimEnd('/'), evidence.Path.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+            BilibiliMediaIdentity.IsSamePage(canonical, actual);
     }
 
     private static bool MatchesRequestedMedia(PageIdentity? page, MediaDescriptor media, Uri requested)
@@ -293,15 +347,25 @@ internal static class BrowserMediaAcceptance
             page.Cid is null || page.Cid != media.Cid) return false;
         var id = requested.AbsolutePath.TrimEnd('/').Split('/')[^1];
         return id.StartsWith("BV", StringComparison.OrdinalIgnoreCase)
-            ? string.Equals(pageUri.AbsolutePath.TrimEnd('/'), requested.AbsolutePath.TrimEnd('/'), StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(id, media.Bvid, StringComparison.OrdinalIgnoreCase) && string.Equals(page.Bvid, media.Bvid, StringComparison.OrdinalIgnoreCase)
+            ? BilibiliMediaIdentity.IsSamePage(pageUri, requested) && SameBvid(id, media.Bvid) && SameBvid(page.Bvid, media.Bvid)
             : long.TryParse(id[2..], out var aid) && media.Aid == aid && page.Aid == aid;
     }
+
+    private static bool SameBvid(string? left, string? right) =>
+        left is not null && right is not null && left.Length >= 2 && right.Length >= 2 &&
+        left.StartsWith("BV", StringComparison.OrdinalIgnoreCase) && right.StartsWith("BV", StringComparison.OrdinalIgnoreCase) &&
+        left.AsSpan(2).SequenceEqual(right.AsSpan(2));
 
     private static DetectionEvidence SafeSnapshot(MediaDetectionSnapshot snapshot, bool cardReady) =>
         new(snapshot.State.ToString(), snapshot.Page?.NavigationGeneration, snapshot.Page?.Bvid, snapshot.Page?.Aid,
             snapshot.Page?.Cid, snapshot.Page is not null && Uri.TryCreate(snapshot.Page.PageUrl, UriKind.Absolute, out var pageUri) ? GetPageNumber(pageUri) : null, cardReady, snapshot.ErrorCode,
             snapshot.Diagnostics.TakeLast(30).Select(item => new DiagnosticEvidence(item.EventCode, item.State.ToString(), item.Timestamp)).ToArray());
+
+    private static MediaEvidence SafeMedia(MediaDescriptor media) =>
+        new(media.Bvid, media.Aid, media.Cid, media.Source.ToString(),
+            media.Tracks.Count(track => track.Type == TrackType.Video),
+            media.Tracks.Count(track => track.Type == TrackType.Audio), media.LegacySegments.Count,
+            media.Tracks.Where(track => track.Type == TrackType.Video).Select(track => track.QualityId).Distinct().ToArray());
 
     private static void Record(AcceptanceReport report, Stopwatch clock, string phase, MediaDetectionSnapshot snapshot, bool cardReady = false) =>
         report.Events.Add(new AcceptanceEvent(clock.Elapsed.TotalMilliseconds, phase, snapshot.State.ToString(),
@@ -330,6 +394,10 @@ internal static class BrowserMediaAcceptance
         public PlaybackEvidence? Playback { get; set; }
         public DetectionEvidence? FinalDetection { get; set; }
         public MediaEvidence? Media { get; set; }
+        public MediaEvidence? InitialMedia { get; set; }
+        public string SupplementalStatus { get; set; } = "not_requested";
+        public string? SupplementalPagePath { get; set; }
+        public MultipartEvidence? Multipart { get; set; }
         public List<AcceptanceEvent> Events { get; } = [];
         public List<NavigationEvidence> NavigationChecks { get; } = [];
         public List<double> UiProbeDelayOverrunsMs { get; } = [];
@@ -347,6 +415,7 @@ internal static class BrowserMediaAcceptance
     private sealed record DiagnosticEvidence(string EventCode, string State, DateTimeOffset Timestamp);
     private sealed record DetectionEvidence(string State, long? Generation, string? Bvid, long? Aid, long? Cid, int? PageNumber, bool CardReady, string? ErrorCode, DiagnosticEvidence[] Diagnostics);
     private sealed record MediaEvidence(string? Bvid, long? Aid, long? Cid, string Source, int VideoTracks, int AudioTracks, int LegacySegments, int?[] Qualities);
-    private sealed record NavigationEvidence(string Phase, bool PlaybackObserved, bool Converged, long? Generation, long? Cid);
+    private sealed record NavigationEvidence(string Phase, bool PlaybackObserved, bool Converged, long? Generation, long? Cid, string? Bvid = null, int? PageNumber = null);
+    private sealed record MultipartEvidence(string? Bvid, long? Aid, long? Page1Cid, long? Page2Cid);
     private sealed record AcceptanceEvent(double ElapsedMs, string Phase, string State, long? Generation = null, string? Bvid = null, long? Cid = null, bool CardReady = false, string? ErrorCode = null);
 }

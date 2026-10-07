@@ -11,6 +11,10 @@ on:
         description: "Optional permitted public BV/AV URL: exercise real embedded playback, detection and download"
         required: false
         type: string
+      media_acceptance_multipart_url:
+        description: "Optional second permitted public multipart BV/AV URL: verify another video, exact p2 CID and rapid return"
+        required: false
+        type: string
       baseline_harness_overlay:
         description: "Label an unchanged baseline with acceptance-only instrumentation"
         required: false
@@ -25,6 +29,7 @@ permissions:
 # may supply another permitted URL; ordinary PR builds retain their existing gates.
 env:
   NOVACLIP_INPUT_ACCEPTANCE_URL: ${{ inputs.media_acceptance_url || ((startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'create' && startsWith(github.ref_name, 'publish/v'))) && 'https://www.bilibili.com/video/BV17x411w7KC/') || '' }}
+  NOVACLIP_INPUT_ACCEPTANCE_MULTIPART_URL: ${{ inputs.media_acceptance_multipart_url || '' }}
 
 jobs:
   build:
@@ -146,7 +151,7 @@ jobs:
           [xml]$versionProps = Get-Content version.props -Raw
           $runtimeIdentifier = [string]$versionProps.Project.PropertyGroup.NovaClipRuntimeIdentifier
           $exe = Join-Path "${{ github.workspace }}" ("publish\" + $runtimeIdentifier + "\NovaClip.exe")
-          ./scripts/verify-browser-media.ps1 -ExecutablePath $exe -VideoUrl $env:NOVACLIP_INPUT_ACCEPTANCE_URL -BuildCommit "${{ github.sha }}" -BaselineHarnessOverlay:($env:NOVACLIP_INPUT_BASELINE_OVERLAY -eq "true")
+          ./scripts/verify-browser-media.ps1 -ExecutablePath $exe -VideoUrl $env:NOVACLIP_INPUT_ACCEPTANCE_URL -MultipartVideoUrl $env:NOVACLIP_INPUT_ACCEPTANCE_MULTIPART_URL -BuildCommit "${{ github.sha }}" -BaselineHarnessOverlay:($env:NOVACLIP_INPUT_BASELINE_OVERLAY -eq "true")
       - name: Upload real media acceptance evidence
         if: always() && env.NOVACLIP_INPUT_ACCEPTANCE_URL != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -197,18 +202,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate explicit publication request
-        if: github.event_name == 'create'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
-          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-          test "$GITHUB_SHA" = "$main_sha" || { echo 'Publication branch must match current main'; exit 1; }
-          test "$GITHUB_REF_NAME" = "publish/v$RELEASE_VERSION"
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo 'Release already exists; refusing replacement'; exit 1
+          if test "$GITHUB_EVENT_NAME" = 'create'; then
+            main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+            test "$GITHUB_SHA" = "$main_sha" || { echo 'Publication branch must match current main'; exit 1; }
+            test "$GITHUB_REF_NAME" = "publish/v$RELEASE_VERSION"
           fi
+          existing_tags="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')"
+          while IFS= read -r existing_tag; do
+            if test "$existing_tag" = "v$RELEASE_VERSION"; then
+              echo 'Release already exists; refusing replacement'; exit 1
+            fi
+          done <<< "$existing_tags"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: NovaClip-${{ needs.build.outputs.runtime_identifier }}-${{ github.sha }}

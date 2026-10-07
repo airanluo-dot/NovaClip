@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ExecutablePath,
     [Parameter(Mandatory = $true)][string]$VideoUrl,
     [Parameter(Mandatory = $true)][string]$BuildCommit,
+    [string]$MultipartVideoUrl,
     [switch]$BaselineHarnessOverlay
 )
 
@@ -12,6 +13,7 @@ $resultPath = Join-Path $root "media-acceptance\result.json"
 if (Get-Process NovaClip -ErrorAction SilentlyContinue) { throw "REAL_MEDIA_ACCEPTANCE_REQUIRES_APP_CLOSED" }
 if (Test-Path $resultPath) { Remove-Item $resultPath -Force }
 $env:NOVACLIP_MEDIA_ACCEPTANCE_URL = $VideoUrl
+$env:NOVACLIP_MEDIA_ACCEPTANCE_MULTIPART_URL = $MultipartVideoUrl
 $env:NOVACLIP_BUILD_COMMIT = $BuildCommit
 $env:NOVACLIP_ACCEPTANCE_BASELINE = if ($BaselineHarnessOverlay) { "1" } else { "0" }
 $env:NOVACLIP_MEDIA_ACCEPTANCE_FFMPEG = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
@@ -34,6 +36,7 @@ try {
         Write-Host ("Real embedded-browser acceptance: " + $result.status + "; " + $result.resultCode)
         throw ("REAL_MEDIA_ACCEPTANCE_" + $result.status.ToUpperInvariant() + ":" + $result.resultCode)
     }
+    if (-not [string]::IsNullOrWhiteSpace($MultipartVideoUrl) -and $result.supplementalStatus -ne "passed") { throw "REAL_MEDIA_ACCEPTANCE_SUPPLEMENTAL_MISSING" }
     $probe = Get-Command ffprobe.exe -ErrorAction Stop
     if ($result.downloadDirectoryRelative -notmatch '^downloads[\\/][0-9a-f]{32}$') { throw "REAL_MEDIA_ACCEPTANCE_OUTPUT_DIRECTORY_INVALID" }
     $outputs = @(Get-ChildItem (Join-Path (Join-Path $root "media-acceptance") $result.downloadDirectoryRelative) -File |
@@ -55,6 +58,7 @@ try {
         if (-not $process.WaitForExit(10000)) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     }
     Remove-Item Env:NOVACLIP_MEDIA_ACCEPTANCE_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:NOVACLIP_MEDIA_ACCEPTANCE_MULTIPART_URL -ErrorAction SilentlyContinue
     Remove-Item Env:NOVACLIP_BUILD_COMMIT -ErrorAction SilentlyContinue
     Remove-Item Env:NOVACLIP_ACCEPTANCE_BASELINE -ErrorAction SilentlyContinue
     Remove-Item Env:NOVACLIP_MEDIA_ACCEPTANCE_FFMPEG -ErrorAction SilentlyContinue
